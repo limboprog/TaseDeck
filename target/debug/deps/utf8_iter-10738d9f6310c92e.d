@@ -1,0 +1,9 @@
+/Users/leonidborodin/Documents/programming/antigravity/TaseDeck/src-tauri/../target/debug/deps/utf8_iter-10738d9f6310c92e.d: /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/lib.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/indices.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/report.rs
+
+/Users/leonidborodin/Documents/programming/antigravity/TaseDeck/src-tauri/../target/debug/deps/libutf8_iter-10738d9f6310c92e.rlib: /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/lib.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/indices.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/report.rs
+
+/Users/leonidborodin/Documents/programming/antigravity/TaseDeck/src-tauri/../target/debug/deps/libutf8_iter-10738d9f6310c92e.rmeta: /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/lib.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/indices.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/report.rs
+
+/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/lib.rs:
+/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/indices.rs:
+/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/utf8_iter-1.0.4/src/report.rs:

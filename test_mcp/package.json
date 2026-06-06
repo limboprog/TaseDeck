@@ -1,0 +1,12 @@
+{
+  "name": "tasedeck-test-mcp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local MCP server for TaseDeck integration tests",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check simulate-cursor-agent.mjs && node --check mcp_stdio_client.mjs",
+    "simulate-agent": "node simulate-cursor-agent.mjs"
+  }
+}
