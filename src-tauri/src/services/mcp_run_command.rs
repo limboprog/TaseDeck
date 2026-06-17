@@ -147,27 +147,77 @@ fn compile_profile_resolved(
     env: &HashMap<String, String>,
 ) -> String {
     if profile.transport == "streamable-http" || profile.transport == "sse" {
-        let url = resolve_env_template(profile.url.as_deref().unwrap_or(""), env).trim().to_string();
-        if url.is_empty() {
-            return String::new();
-        }
-        let mut parts = vec![if profile.transport == "sse" {
-            format!("sse {url}")
-        } else {
-            format!("http {url}")
-        }];
-        push_enabled_args(&mut parts, shared_args, |arg| map_arg_resolved(arg, env));
-        return parts.join(" ");
+        return compile_remote_shell(profile, shared_args, env);
     }
 
-    let base = resolve_env_template(&profile.command, env).trim().to_string();
-    if base.is_empty() {
+    let template = compile_profile_template(profile, shared_args);
+    let exports = build_export_prefix(env);
+    if exports.is_empty() {
+        template
+    } else {
+        format!("{exports} {template}")
+    }
+}
+
+fn compile_remote_shell(
+    profile: &RunCommandProfile,
+    shared_args: &[RunCommandArg],
+    env: &HashMap<String, String>,
+) -> String {
+    let url = resolve_env_template(profile.url.as_deref().unwrap_or(""), env)
+        .trim()
+        .to_string();
+    if url.is_empty() {
         return String::new();
     }
-
-    let mut parts = vec![base];
-    push_enabled_args(&mut parts, shared_args, |arg| map_arg_resolved(arg, env));
+    let mut parts = vec![if profile.transport == "sse" {
+        format!("sse {url}")
+    } else {
+        format!("http {url}")
+    }];
+    push_enabled_args(&mut parts, shared_args, |arg| map_arg_template(arg));
     parts.join(" ")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpActiveTransport {
+    Stdio,
+    Remote {
+        transport_type: String,
+        url: String,
+    },
+}
+
+pub fn resolve_active_transport(config_values_json: &str) -> AppResult<Option<McpActiveTransport>> {
+    let Some((profile, _shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
+        return Ok(None);
+    };
+
+    if profile.transport == "streamable-http" || profile.transport == "sse" {
+        let values: HashMap<String, String> = if config_values_json.trim().is_empty() {
+            HashMap::new()
+        } else {
+            serde_json::from_str(config_values_json).map_err(|error| {
+                AppError::Message(format!("invalid config_values JSON: {error}"))
+            })?
+        };
+        let url = resolve_env_template(profile.url.as_deref().unwrap_or(""), &values)
+            .trim()
+            .to_string();
+        return Ok(Some(McpActiveTransport::Remote {
+            transport_type: profile.transport,
+            url,
+        }));
+    }
+
+    Ok(Some(McpActiveTransport::Stdio))
+}
+
+pub fn is_active_profile_remote(config_values_json: &str) -> bool {
+    matches!(
+        resolve_active_transport(config_values_json),
+        Ok(Some(McpActiveTransport::Remote { .. }))
+    )
 }
 
 fn map_arg_template(arg: &RunCommandArg) -> Option<String> {
@@ -176,19 +226,6 @@ fn map_arg_template(arg: &RunCommandArg) -> Option<String> {
         return None;
     }
     let value = arg.value.trim();
-    if value.is_empty() {
-        Some(name.to_string())
-    } else {
-        Some(format!("{name} {value}"))
-    }
-}
-
-fn map_arg_resolved(arg: &RunCommandArg, env: &HashMap<String, String>) -> Option<String> {
-    let name = arg.name.trim();
-    if name.is_empty() {
-        return None;
-    }
-    let value = resolve_env_template(&arg.value, env).trim().to_string();
     if value.is_empty() {
         Some(name.to_string())
     } else {
@@ -210,22 +247,68 @@ where
     }
 }
 
+fn shell_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn build_export_prefix(env: &HashMap<String, String>) -> String {
+    let mut parts = Vec::new();
+    for (name, value) in collect_env_bindings(env) {
+        if value.trim().is_empty() {
+            continue;
+        }
+        parts.push(format!("export {}=\"{}\"", name, shell_escape(&value)));
+    }
+    parts.join(" ")
+}
+
 fn resolve_env_template(template: &str, env: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
+    for (name, value) in collect_env_bindings(env) {
+        let needle = format!("${{{name}}}");
+        if result.contains(&needle) {
+            result = result.replace(&needle, &value);
+        }
+    }
+    result
+}
+
+fn collect_env_bindings(env: &HashMap<String, String>) -> Vec<(String, String)> {
+    let mut bindings = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let Some(raw) = env.get("__envVariables") {
+        if let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(raw) {
+            for row in rows {
+                let Some(name) = row.get("name").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let name = name.trim();
+                if name.is_empty() || !seen.insert(name.to_string()) {
+                    continue;
+                }
+                let value = row
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                bindings.push((name.to_string(), value));
+            }
+        }
+    }
+
     for (key, value) in env {
         if key.starts_with("__") {
             continue;
         }
-        let name = key.strip_prefix("env:").unwrap_or(key.as_str());
-        if name.trim().is_empty() {
+        let name = key.strip_prefix("env:").unwrap_or(key.as_str()).trim();
+        if name.is_empty() || !seen.insert(name.to_string()) {
             continue;
         }
-        let needle = format!("${{{name}}}");
-        if result.contains(&needle) {
-            result = result.replace(&needle, value);
-        }
+        bindings.push((name.to_string(), value.clone()));
     }
-    result
+
+    bindings
 }
 
 pub fn apply_compiled_run_command(server: &mut McpServer) -> AppResult<()> {
@@ -299,6 +382,58 @@ mod tests {
     }
 
     #[test]
+    fn resolves_env_from_variables_blob() {
+        let run_commands = serde_json::json!({
+            "activeId": "run-1",
+            "sharedArgs": [],
+            "commands": [{
+                "id": "run-1",
+                "transport": "stdio",
+                "command": "node ${script_path}",
+                "args": []
+            }]
+        });
+        let env_rows = serde_json::json!([{
+            "id": "env-1",
+            "name": "script_path",
+            "value": "/tmp/server.mjs"
+        }]);
+        let config_values = serde_json::json!({
+            "__runCommands": run_commands.to_string(),
+            "__envVariables": env_rows.to_string()
+        });
+        let resolved = compile_run_command_from_config_values(&config_values.to_string())
+            .expect("resolved");
+        assert_eq!(
+            resolved,
+            "export script_path=\"/tmp/server.mjs\" node ${script_path}"
+        );
+    }
+
+    #[test]
+    fn resolves_placeholders_in_argument_name() {
+        let run_commands = serde_json::json!({
+            "activeId": "run-1",
+            "sharedArgs": [
+                { "name": "--token ${api_key}", "enabled": true, "value": "" }
+            ],
+            "commands": [{
+                "id": "run-1",
+                "transport": "stdio",
+                "command": "node",
+                "args": []
+            }]
+        });
+        let config_values = serde_json::json!({
+            "__runCommands": run_commands.to_string(),
+            "env:api_key": "secret"
+        });
+        let resolved = compile_run_command_from_config_values(&config_values.to_string())
+            .expect("resolved");
+        assert_eq!(resolved, "export api_key=\"secret\" node --token ${api_key}");
+    }
+
+    #[test]
     fn template_keeps_env_placeholders() {
         let run_commands = serde_json::json!({
             "activeId": "run-1",
@@ -322,6 +457,6 @@ mod tests {
 
         let resolved = compile_run_command_from_config_values(&config_values.to_string())
             .expect("resolved");
-        assert_eq!(resolved, "node secret -y");
+        assert_eq!(resolved, "export api_key=\"secret\" node ${api_key} -y");
     }
 }

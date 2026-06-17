@@ -1,4 +1,9 @@
 import { useEffect, type RefObject } from "react";
+import {
+  findScrollParent,
+  getTableRowAnchor,
+  preserveScrollWhile,
+} from "../preserveScrollOnLayout";
 
 /** Row expand: click row opens it; click elsewhere collapses. */
 export function useMcpExpandedRow(
@@ -17,7 +22,11 @@ export function useMcpExpandedRow(
       if (row) {
         const rowId = row.getAttribute("data-mcp-table-row");
         if (rowId) {
-          setExpandedRowId(expandedRowId === rowId ? null : rowId);
+          const anchor = getTableRowAnchor(row);
+          const scrollParent = findScrollParent(anchor);
+          preserveScrollWhile(scrollParent, anchor, () => {
+            setExpandedRowId(expandedRowId === rowId ? null : rowId);
+          });
         }
         return;
       }
@@ -27,7 +36,10 @@ export function useMcpExpandedRow(
       }
 
       if (tableRef.current?.contains(target)) {
-        setExpandedRowId(null);
+        const scrollParent = findScrollParent(tableRef.current);
+        preserveScrollWhile(scrollParent, tableRef.current, () => {
+          setExpandedRowId(null);
+        });
         return;
       }
 

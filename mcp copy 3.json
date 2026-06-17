@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "tasedeck-topology-0aaeda4c-4e43-445f-8ccb-85709888fd88": {
+      "args": [
+        "/Users/leonidborodin/Documents/programming/antigravity/TaseDeck/src-tauri/resources/topology_aggregator.mjs"
+      ],
+      "command": "node",
+      "env": {
+        "TASEDECK_BRIDGE_HOST": "127.0.0.1",
+        "TASEDECK_BRIDGE_PORT": "63031",
+        "TASEDECK_TOPOLOGY_ID": "0aaeda4c-4e43-445f-8ccb-85709888fd88"
+      }
+    }
+  }
+}

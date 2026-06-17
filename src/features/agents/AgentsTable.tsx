@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PiBrain } from "../../icons";
 import { pickConfigDirectory } from "../../services/agents/api";
-import { AGENT_CATALOG, catalogEntryForLabel } from "../../services/agents/constants";
+import { catalogEntryForLabel } from "../../services/agents/constants";
+import { useAgentCatalog } from "../../services/catalog";
 import { resolveAgentConfigDir } from "../../services/agents/resolveConfigDir";
 import {
   createAgentRecord,
@@ -24,7 +25,6 @@ import {
 
 const GRID_COLUMNS = "minmax(0, 1fr) minmax(0, 2fr) 72px";
 const AGENT_ICON = <PiBrain size={16} color={colors.muted} style={{ flexShrink: 0 }} />;
-const AGENT_OPTIONS = AGENT_CATALOG.map((entry) => ({ value: entry.kind, label: entry.label }));
 
 type AgentComposerDraft = {
   name: string;
@@ -41,6 +41,12 @@ type AgentsTableProps = {
 };
 
 export function AgentsTable({ agents, onUpdated, onError }: AgentsTableProps) {
+  const agentCatalog = useAgentCatalog();
+  const agentOptions = useMemo(
+    () => agentCatalog.map((entry) => ({ value: entry.kind, label: entry.label })),
+    [agentCatalog],
+  );
+  const defaultAgentKind = agentCatalog[0]?.kind ?? "cursor";
   const [composer, setComposer] = useState<AgentComposerDraft | null>(null);
   const [creating, setCreating] = useState(false);
   const resolveGenerationRef = useRef(0);
@@ -142,7 +148,7 @@ export function AgentsTable({ agents, onUpdated, onError }: AgentsTableProps) {
     onError(null);
     setComposer({
       name: "",
-      kind: "cursor",
+      kind: defaultAgentKind,
       path: "",
       resolvingPath: false,
       nameLocked: false,
@@ -232,7 +238,7 @@ export function AgentsTable({ agents, onUpdated, onError }: AgentsTableProps) {
             ) : (
               <McpTablePickerSearch
                 value={composer.name}
-                options={AGENT_OPTIONS}
+                options={agentOptions}
                 icon={AGENT_ICON}
                 onValueChange={(name) =>
                   setComposer((current) => (current ? { ...current, name } : current))

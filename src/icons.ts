@@ -4,11 +4,12 @@
 export { BiLoaderAlt } from "react-icons/bi";
 export { BsLayoutSidebar, BsServer, BsWrench } from "react-icons/bs";
 export { FaStar } from "react-icons/fa";
-export { GoPerson } from "react-icons/go";
+export { GoPerson, GoSignIn } from "react-icons/go";
 export { HiOutlineServer, HiOutlineShoppingBag, HiOutlineSparkles } from "react-icons/hi2";
 export {
   IoAdd,
   IoArrowBack,
+  IoCheckmark,
   IoChevronDown,
   IoChevronForward,
   IoChevronUp,

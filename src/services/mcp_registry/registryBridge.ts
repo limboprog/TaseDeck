@@ -134,6 +134,7 @@ export function registrySearch(query: string, source?: McpSourceId) {
   const nextSource = source ?? snapshot.source;
   const sourceChanged = source !== undefined && source !== snapshot.source;
   searchGeneration += 1;
+  const queryChanged = query !== snapshot.query;
 
   snapshot = {
     ...snapshot,
@@ -143,7 +144,7 @@ export function registrySearch(query: string, source?: McpSourceId) {
   };
   patchMcpRegistryUiState({ query, source: nextSource });
 
-  if (sourceChanged) {
+  if (sourceChanged || queryChanged) {
     emit();
   }
 

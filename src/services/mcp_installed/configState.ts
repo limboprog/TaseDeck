@@ -3,29 +3,30 @@ import {
   getRequiredConfigInputs,
   rebuildInstalledMcpConfig,
 } from "../mcp_registry/parser";
+import type { EnvVariableRow } from "./envEditor";
 import {
-  ENV_VARIABLES_CONFIG_KEY,
   envInputsFromRows,
   envValuesFromRows,
   parseStoredEnvRows,
 } from "./storedEnv";
 import {
-  getRegistryConfigInputsForInstalled,
-  registryEnvToConfigInputs,
-} from "./registryConfig";
-import type { InstalledMcpServer } from "./types";
-
-function parseJsonArray<T>(raw: string | undefined): T[] {
-  if (!raw?.trim()) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
-  }
-}
+  canonicalHeaderId,
+  headerNameFromConfigKey,
+  headerValuesFromRows,
+  parseStoredHeaderRows,
+  type HeaderVariableRow,
+} from "./storedHeaders";
+import type { InstalledMcpServer, McpServerAnalysis } from "./types";
+import { inferRunCommandsFromJson, inferRunCommandsFromShell } from "./jsonConfigInference";
+import {
+  createEmptyRunCommand,
+  getActiveRunCommandProfile,
+  isRemoteRunTransport,
+  normalizeRunCommandsState,
+  parseRunCommandsState,
+  type RunCommandsState,
+} from "./runCommands";
+import { canonicalEnvId, normalizeEnvVariableName } from "./variableNames";
 
 function parseJsonRecord(raw: string | undefined): Record<string, string> {
   if (!raw?.trim()) {
@@ -50,131 +51,223 @@ function parseJsonRecord(raw: string | undefined): Record<string, string> {
   }
 }
 
-function envInputFromName(name: string, isRequired = true): ConfigInput {
-  return {
-    id: `env:${name}`,
-    name,
-    isRequired,
-    isSecret: /key|token|secret|password|credential/i.test(name),
-    source: "environment",
-  };
+const EMPTY_ANALYSIS: McpServerAnalysis = {
+  runCommands: { activeId: null, commands: [], sharedArgs: [] },
+  configInputs: [],
+  envVariables: [],
+  headerVariables: [],
+  compiledCommandTemplate: "",
+};
+
+export function getServerAnalysis(server: InstalledMcpServer): McpServerAnalysis {
+  return server.analysis ?? EMPTY_ANALYSIS;
 }
 
-function dedupeInputs(inputs: ConfigInput[]) {
-  const byId = new Map<string, ConfigInput>();
-  for (const input of inputs) {
-    byId.set(input.id, input);
-  }
-  return [...byId.values()];
-}
-
-export function inferConfigInputsFromJson(jsonConfig: string): ConfigInput[] {
-  try {
-    const parsed = JSON.parse(jsonConfig) as {
-      mcpServers?: Record<string, { env?: Record<string, unknown> }>;
-    };
-    const entry = Object.values(parsed.mcpServers ?? {})[0];
-    const env = entry?.env ?? {};
-    return Object.keys(env).map((name) => envInputFromName(name));
-  } catch {
-    return [];
-  }
-}
-
-export function inferConfigInputsFromRunCommand(runCommand: string): ConfigInput[] {
-  const names = new Set<string>();
-  const pattern = /(?:^|[\s;])([A-Z][A-Z0-9_]*)=(?:"[^"]*"|'[^']*'|[^\s]+)/g;
-
-  for (const match of runCommand.matchAll(pattern)) {
-    names.add(match[1]);
+export function resolveRunCommandsState(options: {
+  values: Record<string, string>;
+  runCommand?: string;
+  jsonConfig?: string;
+  analysisRunCommands?: RunCommandsState;
+}): RunCommandsState {
+  const fromAnalysis = normalizeRunCommandsState(
+    options.analysisRunCommands ?? { activeId: null, commands: [], sharedArgs: [] },
+  );
+  if (fromAnalysis.commands.length > 0) {
+    return fromAnalysis;
   }
 
-  return [...names].map((name) => envInputFromName(name));
+  const fromValues = parseRunCommandsState(options.values);
+  if (fromValues.commands.length > 0) {
+    return fromValues;
+  }
+
+  const fromJson = options.jsonConfig ? inferRunCommandsFromJson(options.jsonConfig) : null;
+  if (fromJson) {
+    return fromJson;
+  }
+
+  const fromShell = inferRunCommandsFromShell(options.runCommand ?? "");
+  if (fromShell) {
+    return fromShell;
+  }
+
+  const fallbackRunCommand = options.runCommand ?? "";
+  if (!fallbackRunCommand.trim()) {
+    return { activeId: null, commands: [], sharedArgs: [] };
+  }
+
+  const profile = createEmptyRunCommand("stdio");
+  profile.command = fallbackRunCommand;
+  return { activeId: profile.id, commands: [profile], sharedArgs: [] };
 }
 
-function inferValuesFromJsonEnv(jsonConfig: string): Record<string, string> {
-  try {
-    const parsed = JSON.parse(jsonConfig) as {
-      mcpServers?: Record<string, { env?: Record<string, unknown> }>;
-    };
-    const entry = Object.values(parsed.mcpServers ?? {})[0];
-    const env = entry?.env ?? {};
-    const values: Record<string, string> = {};
-    for (const [name, value] of Object.entries(env)) {
-      const text =
-        typeof value === "string"
-          ? value
-          : value === null || value === undefined
-            ? ""
-            : String(value);
-      values[`env:${name}`] = text;
-      values[name] = text;
+export function getServerRunCommands(
+  server: InstalledMcpServer,
+  analysis?: McpServerAnalysis,
+): RunCommandsState {
+  return resolveRunCommandsState({
+    values: getServerConfigValues(server, analysis),
+    runCommand: server.runCommand,
+    jsonConfig: server.jsonConfig,
+    analysisRunCommands: (analysis ?? getServerAnalysis(server)).runCommands,
+  });
+}
+
+export function resolveServerConfigInputs(
+  server: InstalledMcpServer,
+  analysis?: McpServerAnalysis,
+): ConfigInput[] {
+  return (analysis ?? getServerAnalysis(server)).configInputs;
+}
+
+export function getServerConfigInputs(
+  server: InstalledMcpServer,
+  analysis?: McpServerAnalysis,
+): ConfigInput[] {
+  return resolveServerConfigInputs(server, analysis);
+}
+
+function mergeEnvRows(
+  stored: Record<string, string>,
+  analysis: McpServerAnalysis,
+): EnvVariableRow[] {
+  const byName = new Map<string, EnvVariableRow>();
+
+  for (const row of analysis.envVariables) {
+    const name = normalizeEnvVariableName(row.name);
+    if (!name) {
+      continue;
     }
-    return values;
-  } catch {
-    return {};
+    byName.set(name, {
+      id: canonicalEnvId(name),
+      name,
+      value: "",
+      isEditing: false,
+    });
   }
+
+  for (const row of parseStoredEnvRows(stored)) {
+    const name = normalizeEnvVariableName(row.name);
+    if (!name) {
+      continue;
+    }
+    const existing = byName.get(name);
+    byName.set(name, {
+      id: canonicalEnvId(name),
+      name,
+      value: row.value.trim() || existing?.value || "",
+      isEditing: false,
+    });
+  }
+
+  return [...byName.values()];
 }
 
-function inferValuesFromRunCommand(runCommand: string): Record<string, string> {
-  const values: Record<string, string> = {};
-  const pattern = /(?:^|[\s;])([A-Z][A-Z0-9_]*)=(?:"([^"]*)"|'([^']*)'|([^\s]+))/g;
+function mergeHeaderRows(
+  stored: Record<string, string>,
+  analysis: McpServerAnalysis,
+): HeaderVariableRow[] {
+  const byName = new Map<string, HeaderVariableRow>();
 
-  for (const match of runCommand.matchAll(pattern)) {
-    const name = match[1];
-    const value = match[2] ?? match[3] ?? match[4] ?? "";
-    values[`env:${name}`] = value;
-    values[name] = value;
+  for (const row of analysis.headerVariables) {
+    const name = (headerNameFromConfigKey(row.name) ?? row.name).trim();
+    if (!name) {
+      continue;
+    }
+    byName.set(name, {
+      id: canonicalHeaderId(name),
+      name,
+      value: row.value,
+    });
+  }
+
+  for (const row of parseStoredHeaderRows(stored)) {
+    const name = (headerNameFromConfigKey(row.name) ?? row.name).trim();
+    if (!name) {
+      continue;
+    }
+    const fromAnalysis = byName.get(name);
+    const storedValue = row.value.trim();
+    const value =
+      storedValue.includes("${") || storedValue.includes("{")
+        ? storedValue
+        : fromAnalysis?.value || storedValue;
+    byName.set(name, {
+      id: canonicalHeaderId(name),
+      name,
+      value: value || fromAnalysis?.value || "",
+    });
+  }
+
+  return [...byName.values()];
+}
+
+export function getServerConfigValues(
+  server: InstalledMcpServer,
+  analysisOverride?: McpServerAnalysis | null,
+): Record<string, string> {
+  const analysis =
+    analysisOverride != null ? analysisOverride : getServerAnalysis(server);
+  const stored = parseJsonRecord(server.configValues);
+
+  const envRows = mergeEnvRows(stored, analysis);
+  const headerRows = mergeHeaderRows(stored, analysis);
+
+  let values = envRows.length > 0 ? envValuesFromRows(stored, envRows) : stored;
+  if (headerRows.length > 0) {
+    values = headerValuesFromRows(values, headerRows);
   }
 
   return values;
 }
 
-export function resolveServerConfigInputs(server: InstalledMcpServer): ConfigInput[] {
-  const stored = parseJsonArray<ConfigInput>(server.configInputs);
-  const fromRegistry = getRegistryConfigInputsForInstalled(server);
-  const fromRegistryEnv = registryEnvToConfigInputs(server);
-  const fromJson = inferConfigInputsFromJson(server.jsonConfig);
-  const fromRun = inferConfigInputsFromRunCommand(server.runCommand);
-
-  return dedupeInputs([
-    ...stored,
-    ...fromRegistry,
-    ...fromRegistryEnv,
-    ...fromJson,
-    ...fromRun,
-  ]);
+export function hasPendingEnvRows(values: Record<string, string>): boolean {
+  const rows = parseStoredEnvRows(values);
+  if (rows.length === 0) {
+    return false;
+  }
+  return rows.some((row) => row.name.trim() && !row.value.trim());
 }
 
-export function getServerConfigInputs(server: InstalledMcpServer): ConfigInput[] {
-  return resolveServerConfigInputs(server);
+function isRemoteProfileConfigured(
+  _server: InstalledMcpServer,
+  _values: Record<string, string>,
+  runCommands: RunCommandsState,
+): boolean {
+  const profile = getActiveRunCommandProfile(runCommands);
+  if (!profile || !isRemoteRunTransport(profile.transport)) {
+    return false;
+  }
+  return Boolean(profile.url?.trim());
 }
 
-export function getServerConfigValues(server: InstalledMcpServer): Record<string, string> {
-  const stored = parseJsonRecord(server.configValues);
-  const rows = parseStoredEnvRows(stored);
+function stdioRelevantInputs(server: InstalledMcpServer): ConfigInput[] {
+  return getServerConfigInputs(server).filter(
+    (input) => input.source === "environment" || input.source === "argument",
+  );
+}
 
-  if (stored[ENV_VARIABLES_CONFIG_KEY]?.trim() || rows.length > 0) {
-    return envValuesFromRows(stored, rows);
+function isStdioProfileConfigured(
+  server: InstalledMcpServer,
+  values: Record<string, string>,
+): boolean {
+  if (hasPendingEnvRows(values)) {
+    return false;
   }
 
-  const fromJson = inferValuesFromJsonEnv(server.jsonConfig);
-  const fromRun = inferValuesFromRunCommand(server.runCommand);
-  const merged = { ...fromRun, ...fromJson, ...stored };
-  return envValuesFromRows(merged, parseStoredEnvRows(merged));
-}
-
-export function isMcpServerConfigured(server: InstalledMcpServer): boolean {
-  const inputs = getServerConfigInputs(server);
-  const required = getRequiredConfigInputs(inputs);
+  const required = getRequiredConfigInputs(stdioRelevantInputs(server));
 
   if (required.length === 0) {
     return true;
   }
 
-  const values = getServerConfigValues(server);
   for (const input of required) {
-    const value = values[input.id]?.trim() ?? values[input.name]?.trim() ?? "";
+    const name = normalizeEnvVariableName(input.name);
+    const value =
+      values[canonicalEnvId(name)]?.trim() ??
+      values[input.id]?.trim() ??
+      values[name]?.trim() ??
+      "";
     if (!value) {
       return false;
     }
@@ -182,35 +275,60 @@ export function isMcpServerConfigured(server: InstalledMcpServer): boolean {
   return true;
 }
 
-export function listConfiguredMcpServers(servers: InstalledMcpServer[]) {
-  return servers.filter(isMcpServerConfigured);
-}
+/** Remote: try with URL only (keys optional). Stdio: full config required. */
+export function canAttemptMcpTools(
+  server: InstalledMcpServer,
+  options?: {
+    values?: Record<string, string>;
+    runCommands?: RunCommandsState;
+  },
+): boolean {
+  if (server.id <= 0) {
+    return false;
+  }
 
-function escapeShell(value: string) {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
+  const runCommands = options?.runCommands ?? getServerRunCommands(server);
+  const profile = getActiveRunCommandProfile(runCommands);
+  if (profile && isRemoteRunTransport(profile.transport)) {
+    return Boolean(profile.url?.trim());
+  }
 
-function applyEnvToRunCommand(
-  runCommand: string,
-  env: Record<string, string>,
-): string {
-  let next = runCommand.trim();
-
-  for (const [name, value] of Object.entries(env)) {
-    if (!value.trim()) {
-      continue;
-    }
-
-    const assignment = `${name}="${escapeShell(value)}"`;
-    const pattern = new RegExp(`(^|[\\s;])${name}=(\"[^\"]*\"|'[^']*'|[^\\s]+)`);
-    if (pattern.test(next)) {
-      next = next.replace(pattern, `$1${assignment}`);
-    } else {
-      next = next ? `${assignment} ${next}` : assignment;
+  if (!profile?.transport && server.jsonConfig.trim()) {
+    const inferred = inferRunCommandsFromJson(server.jsonConfig);
+    if (inferred) {
+      const inferredProfile = getActiveRunCommandProfile(inferred);
+      if (inferredProfile && isRemoteRunTransport(inferredProfile.transport)) {
+        return Boolean(inferredProfile.url?.trim());
+      }
     }
   }
 
-  return next;
+  return isMcpServerConfigured(server, { values: options?.values, runCommands });
+}
+
+export function isMcpServerConfigured(
+  server: InstalledMcpServer,
+  options?: {
+    values?: Record<string, string>;
+    runCommands?: RunCommandsState;
+    analysis?: McpServerAnalysis | null;
+  },
+): boolean {
+  const analysis =
+    options?.analysis != null ? options.analysis : undefined;
+  const values = options?.values ?? getServerConfigValues(server, analysis);
+  const runCommands = options?.runCommands ?? getServerRunCommands(server, analysis);
+  const profile = getActiveRunCommandProfile(runCommands);
+
+  if (profile && isRemoteRunTransport(profile.transport)) {
+    return isRemoteProfileConfigured(server, values, runCommands);
+  }
+
+  return isStdioProfileConfigured(server, values);
+}
+
+export function listConfiguredMcpServers(servers: InstalledMcpServer[]) {
+  return servers.filter((server) => isMcpServerConfigured(server));
 }
 
 export function buildUpdatedMcpServer(
@@ -220,7 +338,11 @@ export function buildUpdatedMcpServer(
   options?: { runCommand?: string },
 ): InstalledMcpServer {
   const rows = parseStoredEnvRows(values);
-  const persistedValues = envValuesFromRows(values, rows);
+  const headerRows = parseStoredHeaderRows(values);
+  const persistedValues = headerValuesFromRows(
+    envValuesFromRows(values, rows),
+    headerRows,
+  );
   const inputs = envInputsFromRows(
     inputsOverride ?? resolveServerConfigInputs(server),
     rows,
@@ -232,18 +354,8 @@ export function buildUpdatedMcpServer(
     server.name,
   );
 
-  const env: Record<string, string> = {};
-  for (const row of rows) {
-    const name = row.name.trim();
-    if (name && row.value.trim()) {
-      env[name] = row.value;
-    }
-  }
-
   const explicitRun = options?.runCommand?.trim();
-  const runCommand = explicitRun
-    ? applyEnvToRunCommand(explicitRun, env)
-    : applyEnvToRunCommand(rebuilt.runCommand || server.runCommand, env);
+  const runCommand = explicitRun || rebuilt.runCommand || server.runCommand;
 
   return {
     ...server,
@@ -251,15 +363,15 @@ export function buildUpdatedMcpServer(
     configValues: JSON.stringify(persistedValues),
     jsonConfig: rebuilt.jsonConfig,
     runCommand,
+    analysis: undefined,
   };
 }
 
 export function hasPendingRequiredConfig(
   server: InstalledMcpServer,
   values: Record<string, string>,
+  runCommands?: RunCommandsState,
+  analysis?: McpServerAnalysis | null,
 ) {
-  return !isMcpServerConfigured({
-    ...server,
-    configValues: JSON.stringify(values),
-  });
+  return !isMcpServerConfigured(server, { values, runCommands, analysis });
 }

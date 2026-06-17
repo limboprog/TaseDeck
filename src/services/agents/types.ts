@@ -1,4 +1,5 @@
-export type AgentKind = "cursor" | "claude-code" | "antigravity" | "copilot";
+/** Agent identifier from backend catalog (`agents_list_catalog`). */
+export type AgentKind = string;
 
 export type AgentCatalogEntry = {
   kind: AgentKind;

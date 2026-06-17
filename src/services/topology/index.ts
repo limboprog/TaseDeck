@@ -7,7 +7,7 @@ export type {
   TopologyNode,
   TopologyNodeType,
 } from "./types";
-export { AGENT_OPTIONS, agentLabel } from "./constants";
+export { agentLabel, getAgentOptions } from "./constants";
 export { createId } from "./storage";
 export { useTopologies } from "./useTopologies";
 export {

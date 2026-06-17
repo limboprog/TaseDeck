@@ -1,50 +1,28 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  BsServer,
   IoChevronDown,
   IoChevronForward,
   IoPlay,
   IoSettingsOutline,
   IoSquare,
 } from "../../icons";
-import { GraphContextMenu, type GraphContextMenuAction } from "./GraphContextMenu";
 import { Text, XStack, YStack } from "tamagui";
 import type { TopologyBlock, TopologyNode } from "../../services/topology";
-import { borders, colors, graph, surfaces, tamaguiSurfaces } from "../../theme";
+import { colors, graph, tamaguiSurfaces } from "../../theme";
 import {
   BLOCK_CONTENT_WIDTH,
   BLOCK_MEMBER_GAP,
-  BLOCK_MEMBER_HEIGHT,
   BLOCK_NAME_HEIGHT,
   BLOCK_PADDING,
   getBlockRect,
   getBlockWidth,
   isMemberRunning,
 } from "./blockLayout";
+import { GraphServerRow, graphServerIconButtonStyle } from "./GraphServerRow";
+import { openGraphContextMenu } from "./showNativeContextMenu";
 
 const NAME_FONT_SIZE = 13;
 const NAME_MAX_CHARS = 28;
-
-function iconButtonStyle(highlighted: boolean) {
-  return {
-    width: 22,
-    height: 22,
-    borderRadius: 999,
-    border: highlighted
-      ? `1px solid ${graph.iconButtonBorder}`
-      : `1px solid ${graph.iconButtonBorderDim}`,
-    background: graph.iconButtonBg,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    flexShrink: 0,
-    padding: 0,
-    opacity: highlighted ? 1 : 0.32,
-    boxShadow: highlighted ? graph.shadowSoft : "none",
-    transition: "opacity 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease",
-  } as const;
-}
 
 function nameFieldWidthChars(name: string) {
   return Math.min(Math.max(name.length, 4), NAME_MAX_CHARS);
@@ -92,11 +70,6 @@ export function GraphBlock({
   const height = getBlockRect(block, members.length).height;
   const [editingName, setEditingName] = useState(false);
   const [hoveredMemberId, setHoveredMemberId] = useState<string | null>(null);
-  const [memberMenu, setMemberMenu] = useState<{
-    memberId: string;
-    x: number;
-    y: number;
-  } | null>(null);
   const nameInputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -105,22 +78,6 @@ export function GraphBlock({
       nameInputRef.current?.select();
     }
   }, [editingName]);
-
-  const memberMenuActions: GraphContextMenuAction[] = memberMenu
-    ? [
-        {
-          id: "separate",
-          label: "Separate",
-          onSelect: () => onSeparateMember(memberMenu.memberId),
-        },
-        {
-          id: "delete",
-          label: "Delete",
-          destructive: true,
-          onSelect: () => onDeleteMember(memberMenu.memberId),
-        },
-      ]
-    : [];
 
   const commitName = (raw: string) => {
     const next = raw.trim() || "Block";
@@ -273,86 +230,62 @@ export function GraphBlock({
               const rowHovered = hoveredMemberId === member.id;
               const buttonsHighlighted = rowHovered;
               return (
-                <XStack
+                <GraphServerRow
                   key={member.id}
+                  name={member.name}
                   width={BLOCK_CONTENT_WIDTH}
-                  height={BLOCK_MEMBER_HEIGHT}
-                  px={6}
-                  items="center"
-                  gap={6}
-                  rounded={8}
-                  borderWidth={1}
-                  borderColor={
-                    running ? borders.focus : tamaguiSurfaces.activeBg
-                  }
-                  bg={running ? tamaguiSurfaces.controlBg : surfaces.disabled}
-                  style={{ cursor: "grab" }}
+                  running={running}
+                  highlighted={rowHovered}
+                  cursor={isDragging ? "grabbing" : "grab"}
                   onPointerEnter={() => setHoveredMemberId(member.id)}
                   onPointerLeave={() =>
                     setHoveredMemberId((current) => (current === member.id ? null : current))
                   }
                   onPointerDown={(event) => onMemberPointerDown(member.id, event)}
                   onContextMenu={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setMemberMenu({
-                      memberId: member.id,
-                      x: event.clientX,
-                      y: event.clientY,
-                    });
+                    openGraphContextMenu(event, [
+                      {
+                        id: "separate",
+                        label: "Separate",
+                        onSelect: () => onSeparateMember(member.id),
+                      },
+                      {
+                        id: "delete",
+                        label: "Delete",
+                        onSelect: () => onDeleteMember(member.id),
+                      },
+                    ]);
                   }}
-                >
-                  <BsServer
-                    size={15}
-                    color={running || rowHovered ? colors.accent : colors.muted}
-                    aria-hidden
-                    style={{ flexShrink: 0 }}
-                  />
+                  actions={
+                    <>
+                      <button
+                        type="button"
+                        style={graphServerIconButtonStyle(buttonsHighlighted)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenMemberSettings(member.id);
+                        }}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        aria-label="MCP server details"
+                      >
+                        <IoSettingsOutline size={12} />
+                      </button>
 
-                  <Text
-                    color={running || rowHovered ? colors.foreground : colors.muted}
-                    fontSize={12}
-                    fontWeight="600"
-                    numberOfLines={1}
-                    flex={1}
-                    select="none"
-                  >
-                    {member.name}
-                  </Text>
-
-                  <button
-                    type="button"
-                    style={{
-                      ...iconButtonStyle(buttonsHighlighted),
-                      color: buttonsHighlighted ? colors.foreground : colors.muted,
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onOpenMemberSettings(member.id);
-                    }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    aria-label="MCP server details"
-                  >
-                    <IoSettingsOutline size={12} />
-                  </button>
-
-                  <button
-                    type="button"
-                    style={{
-                      ...iconButtonStyle(buttonsHighlighted),
-                      color: buttonsHighlighted ? colors.foreground : colors.muted,
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleMemberRunning(member.id);
-                    }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    aria-label={running ? "Pause server" : "Run server"}
-                  >
-                    {running ? <IoSquare size={11} /> : <IoPlay size={11} />}
-                  </button>
-
-                </XStack>
+                      <button
+                        type="button"
+                        style={graphServerIconButtonStyle(buttonsHighlighted)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onToggleMemberRunning(member.id);
+                        }}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        aria-label={running ? "Pause server" : "Run server"}
+                      >
+                        {running ? <IoSquare size={11} /> : <IoPlay size={11} />}
+                      </button>
+                    </>
+                  }
+                />
               );
             })}
           </YStack>
@@ -371,14 +304,6 @@ export function GraphBlock({
           boxShadow: `0 0 0 3px ${colors.accent}33`,
           pointerEvents: "none",
         }}
-      />
-
-      <GraphContextMenu
-        open={memberMenu !== null}
-        x={memberMenu?.x ?? 0}
-        y={memberMenu?.y ?? 0}
-        actions={memberMenuActions}
-        onClose={() => setMemberMenu(null)}
       />
     </div>
   );

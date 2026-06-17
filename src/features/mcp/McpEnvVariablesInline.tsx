@@ -7,9 +7,14 @@ import {
   envValuesFromRows,
   parseStoredEnvRows,
 } from "../../services/mcp_installed/storedEnv";
+import {
+  canonicalEnvId,
+  normalizeEnvVariableName,
+} from "../../services/mcp_installed/variableNames";
 import type { EnvVariableRow } from "../../services/mcp_installed/envEditor";
 import type { ConfigInput } from "../../services/mcp_registry/parser";
 import { McpSectionHeader } from "./McpSectionHeader";
+import { mcpTableLeadingColumnStyle } from "./mcpTableStyles";
 import { McpDataTable, McpTableRow } from "./table/McpDataTable";
 import {
   McpTableAddHeader,
@@ -22,21 +27,71 @@ import {
 } from "./table/McpTableCells";
 import { useMcpExpandedRow } from "./table/useMcpExpandedRow";
 
-const GRID_COLUMNS = "minmax(0, 1.05fr) minmax(0, 0.95fr) minmax(0, 0.95fr) 48px";
+const GRID_COLUMNS = "minmax(0, 1fr) minmax(0, 1fr) 44px";
 
 type EnvComposerDraft = {
-  label: string;
+  id: string;
   identificator: string;
   token: string;
 };
 
-function isComposerComplete(draft: EnvComposerDraft | null): draft is EnvComposerDraft {
-  if (!draft) {
-    return false;
+function createDraftId() {
+  return `env-draft-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function isDraftComplete(draft: EnvComposerDraft): boolean {
+  return Boolean(draft.identificator.trim() && draft.token.trim());
+}
+
+function deriveEnvUiState(
+  values: Record<string, string>,
+  baseInputs: ConfigInput[],
+): { committed: EnvVariableRow[]; pending: EnvComposerDraft[] } {
+  const committed: EnvVariableRow[] = [];
+  const pending: EnvComposerDraft[] = [];
+  const seenNames = new Set<string>();
+
+  for (const row of parseStoredEnvRows(values)) {
+    const name = normalizeEnvVariableName(row.name);
+    if (!name || seenNames.has(name)) {
+      continue;
+    }
+    seenNames.add(name);
+    if (row.value.trim()) {
+      committed.push({ ...row, isEditing: false });
+    } else {
+      pending.push({ id: row.id, identificator: name, token: "" });
+    }
   }
-  return Boolean(
-    draft.label.trim() && draft.identificator.trim() && draft.token.trim(),
-  );
+
+  for (const input of baseInputs) {
+    if (input.source !== "environment") {
+      continue;
+    }
+    const name = normalizeEnvVariableName(input.name);
+    if (!name || seenNames.has(name)) {
+      continue;
+    }
+    seenNames.add(name);
+    const envId = canonicalEnvId(name);
+    const token = values[envId]?.trim() || values[name]?.trim() || "";
+    if (token) {
+      committed.push({
+        id: envId,
+        name,
+        value: token,
+        isEditing: false,
+      });
+    } else {
+      pending.push({
+        id: envId,
+        identificator: name,
+        token: "",
+      });
+    }
+  }
+
+  return { committed, pending };
 }
 
 export function maskTokenValue(token: string) {
@@ -51,18 +106,18 @@ export function maskTokenValue(token: string) {
 }
 
 function EnvVariablesTable({
-  rows,
-  composer,
-  onComposerChange,
-  onComposerSave,
+  committedRows,
+  pendingDrafts,
+  onPendingChange,
+  onPendingSave,
   onRemoveRow,
   onAdd,
   addDisabled,
 }: {
-  rows: EnvVariableRow[];
-  composer: EnvComposerDraft | null;
-  onComposerChange: (patch: Partial<EnvComposerDraft>) => void;
-  onComposerSave: () => void;
+  committedRows: EnvVariableRow[];
+  pendingDrafts: EnvComposerDraft[];
+  onPendingChange: (draftId: string, patch: Partial<EnvComposerDraft>) => void;
+  onPendingSave: (draftId: string) => void;
   onRemoveRow: (rowId: string) => void;
   onAdd: () => void;
   addDisabled: boolean;
@@ -71,18 +126,19 @@ function EnvVariablesTable({
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   useMcpExpandedRow(expandedRowId, setExpandedRowId, tableRef);
 
-  const canAddRow = isComposerComplete(composer);
-  const hasBody = rows.length > 0 || composer !== null;
-  const composerIsLastRow = Boolean(composer) && rows.length === 0;
+  const hasBody = committedRows.length > 0 || pendingDrafts.length > 0;
 
-  const handleComposerKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && canAddRow) {
+  const handlePendingKeyDown = (
+    event: KeyboardEvent<HTMLInputElement>,
+    draft: EnvComposerDraft,
+  ) => {
+    if (event.key === "Enter" && isDraftComplete(draft)) {
       event.preventDefault();
-      onComposerSave();
+      onPendingSave(draft.id);
     }
-    if (event.key === "Escape") {
+    if (event.key === "Escape" && !draft.identificator.trim()) {
       event.preventDefault();
-      onComposerChange({ label: "", identificator: "", token: "" });
+      onPendingChange(draft.id, { identificator: "", token: "" });
     }
   };
 
@@ -91,9 +147,12 @@ function EnvVariablesTable({
       shellRef={tableRef}
       gridColumns={GRID_COLUMNS}
       columns={[
-        { key: "name", header: "Name" },
-        { key: "id", header: "Identificator", headerStyle: { paddingLeft: 6 } },
-        { key: "token", header: "Token", headerStyle: { paddingLeft: 6 } },
+        {
+          key: "id",
+          header: "Identificator",
+          headerStyle: mcpTableLeadingColumnStyle,
+        },
+        { key: "token", header: "Token" },
         {
           key: "actions",
           header: <McpTableAddHeader onClick={onAdd} disabled={addDisabled} />,
@@ -106,63 +165,74 @@ function EnvVariablesTable({
         ) : undefined
       }
     >
-      {composer ? (
-        <McpTableRow rowId="__composer__">
-          <McpTableCell isLastRow={composerIsLastRow} isRowExpanded={expandedRowId === "__composer__"}>
-            <McpTableInput
-              value={composer.label}
-              onChange={(label) => onComposerChange({ label })}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="Display name"
-            />
-          </McpTableCell>
-          <McpTableCell
-            isLastRow={composerIsLastRow}
-            isRowExpanded={expandedRowId === "__composer__"}
-            style={{ paddingLeft: 6 }}
-          >
-            <McpTableInput
-              value={composer.identificator}
-              onChange={(identificator) => onComposerChange({ identificator })}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="api_key"
-              monospace
-            />
-          </McpTableCell>
-          <McpTableCell
-            isLastRow={composerIsLastRow}
-            isRowExpanded={expandedRowId === "__composer__"}
-            style={{ paddingLeft: 6 }}
-          >
-            <McpTableInput
-              value={composer.token}
-              onChange={(token) => onComposerChange({ token })}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="secret value"
-            />
-          </McpTableCell>
-          <McpTableCell isLastRow={composerIsLastRow} align="end">
-            <McpTableSave onClick={onComposerSave} disabled={!canAddRow} />
-          </McpTableCell>
-        </McpTableRow>
-      ) : null}
+      {pendingDrafts.map((draft, index) => {
+        const isLastRow =
+          index === pendingDrafts.length - 1 && committedRows.length === 0;
+        const isExpanded = expandedRowId === draft.id;
+        return (
+          <McpTableRow key={draft.id} rowId={draft.id}>
+            <McpTableCell
+              isLastRow={isLastRow}
+              isRowExpanded={isExpanded}
+              style={mcpTableLeadingColumnStyle}
+              interactive
+            >
+              <div data-mcp-row-interactive style={{ width: "100%" }}>
+                <McpTableInput
+                  value={draft.identificator}
+                  onChange={(identificator) =>
+                    onPendingChange(draft.id, { identificator })
+                  }
+                  onKeyDown={(event) => handlePendingKeyDown(event, draft)}
+                  placeholder="api_key"
+                  monospace
+                />
+              </div>
+            </McpTableCell>
+            <McpTableCell
+              isLastRow={isLastRow}
+              isRowExpanded={isExpanded}
+              interactive
+            >
+              <div data-mcp-row-interactive style={{ width: "100%" }}>
+                <McpTableInput
+                  value={draft.token}
+                  onChange={(token) => onPendingChange(draft.id, { token })}
+                  onKeyDown={(event) => handlePendingKeyDown(event, draft)}
+                  placeholder="Enter value"
+                />
+              </div>
+            </McpTableCell>
+            <McpTableCell isLastRow={isLastRow} align="end">
+              <McpTableSave
+                onClick={() => onPendingSave(draft.id)}
+                disabled={!isDraftComplete(draft)}
+              />
+            </McpTableCell>
+          </McpTableRow>
+        );
+      })}
 
-      {rows.map((row, index) => {
-        const isLastRow = index === rows.length - 1;
+      {committedRows.map((row, index) => {
+        const isLastRow = index === committedRows.length - 1;
         const isExpanded = expandedRowId === row.id;
         return (
           <McpTableRow key={row.id} rowId={row.id}>
-            <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded}>
-              <McpTablePlainText value={row.label?.trim() || ""} isRowExpanded={isExpanded} />
-            </McpTableCell>
-            <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded} style={{ paddingLeft: 6 }}>
+            <McpTableCell
+              isLastRow={isLastRow}
+              isRowExpanded={isExpanded}
+              style={mcpTableLeadingColumnStyle}
+            >
               <McpTablePlainText
                 value={row.name}
                 monospace
                 isRowExpanded={isExpanded}
               />
             </McpTableCell>
-            <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded} style={{ paddingLeft: 6 }}>
+            <McpTableCell
+              isLastRow={isLastRow}
+              isRowExpanded={isExpanded}
+            >
               <McpTablePlainText
                 value={maskTokenValue(row.value)}
                 monospace
@@ -198,8 +268,8 @@ type McpEnvVariablesInlineProps = {
   onPersist?: (values: Record<string, string>, inputs: ConfigInput[]) => Promise<void>;
 };
 
-const emptyComposer = (): EnvComposerDraft => ({
-  label: "",
+const emptyDraft = (): EnvComposerDraft => ({
+  id: createDraftId(),
   identificator: "",
   token: "",
 });
@@ -211,74 +281,104 @@ export function McpEnvVariablesInline({
   onChange,
   onPersist,
 }: McpEnvVariablesInlineProps) {
-  const [rows, setRows] = useState<EnvVariableRow[]>(() => parseStoredEnvRows(values));
-  const [composer, setComposer] = useState<EnvComposerDraft | null>(null);
+  const initial = deriveEnvUiState(values, baseInputs);
+  const [committedRows, setCommittedRows] = useState<EnvVariableRow[]>(
+    () => initial.committed,
+  );
+  const [pendingDrafts, setPendingDrafts] = useState<EnvComposerDraft[]>(
+    () => initial.pending,
+  );
   const onChangeRef = useRef(onChange);
   const onPersistRef = useRef(onPersist);
   const baseInputsRef = useRef(baseInputs);
   const valuesRef = useRef(values);
+  const skipValuesSyncRef = useRef(false);
 
   onChangeRef.current = onChange;
   onPersistRef.current = onPersist;
   baseInputsRef.current = baseInputs;
   valuesRef.current = values;
 
-  useEffect(() => {
-    const parsed = parseStoredEnvRows(values);
-    setRows(parsed);
-    setComposer(null);
-  }, [resetKey, values]);
+  const applyDerivedState = (next: ReturnType<typeof deriveEnvUiState>) => {
+    setCommittedRows(next.committed);
+    setPendingDrafts(next.pending);
+  };
 
-  const commitToParent = async (nextRows: EnvVariableRow[]) => {
-    const mergedValues = envValuesFromRows(valuesRef.current, nextRows);
-    const mergedInputs = envInputsFromRows(baseInputsRef.current, nextRows);
+  useEffect(() => {
+    applyDerivedState(deriveEnvUiState(values, baseInputs));
+  }, [resetKey]);
+
+  useEffect(() => {
+    if (skipValuesSyncRef.current) {
+      skipValuesSyncRef.current = false;
+      return;
+    }
+    applyDerivedState(deriveEnvUiState(values, baseInputs));
+  }, [values, baseInputs]);
+
+  const commitToParent = async (nextCommitted: EnvVariableRow[]) => {
+    const mergedValues = envValuesFromRows(valuesRef.current, nextCommitted);
+    const mergedInputs = envInputsFromRows(baseInputsRef.current, nextCommitted);
+    skipValuesSyncRef.current = true;
     onChangeRef.current(mergedValues, mergedInputs);
     await onPersistRef.current?.(mergedValues, mergedInputs);
   };
 
-  const handleComposerSave = () => {
-    if (!isComposerComplete(composer)) {
+  const handlePendingChange = (
+    draftId: string,
+    patch: Partial<EnvComposerDraft>,
+  ) => {
+    setPendingDrafts((current) =>
+      current.map((draft) =>
+        draft.id === draftId ? { ...draft, ...patch } : draft,
+      ),
+    );
+  };
+
+  const handlePendingSave = (draftId: string) => {
+    const draft = pendingDrafts.find((entry) => entry.id === draftId);
+    if (!draft || !isDraftComplete(draft)) {
       return;
     }
-    const label = composer.label.trim();
-    const identificator = composer.identificator.trim();
-    const token = composer.token.trim();
+    const identificator = draft.identificator.trim();
+    const token = draft.token.trim();
     const newRow: EnvVariableRow = {
       ...createNewEnvRow(),
-      name: identificator,
+      id: canonicalEnvId(identificator),
+      name: normalizeEnvVariableName(identificator),
       value: token,
-      label,
     };
-    const next = [...rows, newRow];
-    setRows(next);
-    setComposer(null);
-    void commitToParent(next);
+    const nextCommitted = [...committedRows, newRow];
+    const nextPending = pendingDrafts.filter((entry) => entry.id !== draftId);
+    setCommittedRows(nextCommitted);
+    setPendingDrafts(nextPending);
+    void commitToParent(nextCommitted);
   };
 
   const removeRow = (rowId: string) => {
-    const next = rows.filter((entry) => entry.id !== rowId);
-    setRows(next);
+    const next = committedRows.filter((entry) => entry.id !== rowId);
+    setCommittedRows(next);
     void commitToParent(next);
   };
 
   const handleAdd = () => {
-    if (composer) {
+    if (pendingDrafts.some((draft) => !draft.identificator.trim())) {
       return;
     }
-    setComposer(emptyComposer());
+    setPendingDrafts((current) => [...current, emptyDraft()]);
   };
 
   return (
     <YStack gap={8}>
       <McpSectionHeader title="Environment variables" />
       <EnvVariablesTable
-        rows={rows}
-        composer={composer}
-        onComposerChange={(patch) => setComposer((current) => (current ? { ...current, ...patch } : current))}
-        onComposerSave={handleComposerSave}
+        committedRows={committedRows}
+        pendingDrafts={pendingDrafts}
+        onPendingChange={handlePendingChange}
+        onPendingSave={handlePendingSave}
         onRemoveRow={removeRow}
         onAdd={handleAdd}
-        addDisabled={composer !== null}
+        addDisabled={pendingDrafts.some((draft) => !draft.identificator.trim())}
       />
     </YStack>
   );

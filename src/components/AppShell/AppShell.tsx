@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { XStack, YStack } from "tamagui";
 import { useSurfaceMode } from "../../preferences/SurfaceModeContext";
+import { layoutClasses, mergeLayoutClass } from "../../styles/layout";
 import { blocks, borders, colors, glassGlowStyle, glassSurfaceStyle, shellSurfaceStyle } from "../../theme";
 import { Sidebar, type NavId } from "../Sidebar/Sidebar";
 
@@ -19,6 +20,7 @@ export function AppShell({ activeId, onNavigate, children }: AppShellProps) {
 
   return (
     <XStack
+      className={mergeLayoutClass(layoutClasses.clip, layoutClasses.stack)}
       flex={1}
       height="100%"
       minH={0}
@@ -38,8 +40,9 @@ export function AppShell({ activeId, onNavigate, children }: AppShellProps) {
         onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />
 
-      <YStack flex={1} minW={0} minH={0} overflow="hidden">
+      <YStack className={layoutClasses.clip} flex={1} minW={0} minH={0} overflow="hidden">
         <YStack
+          className={layoutClasses.clip}
           flex={1}
           minH={0}
           position="relative"
@@ -60,8 +63,8 @@ export function AppShell({ activeId, onNavigate, children }: AppShellProps) {
             />
           ) : null}
 
-          <YStack flex={1} minH={0} py={24} px={28} z={1} overflow="hidden">
-            <YStack flex={1} minH={0} overflow="hidden">
+          <YStack className={layoutClasses.clip} flex={1} minH={0} py={24} px={28} z={1} overflow="hidden">
+            <YStack className={mergeLayoutClass(layoutClasses.clip, layoutClasses.stack)} flex={1} minH={0} overflow="hidden">
               {children}
             </YStack>
           </YStack>

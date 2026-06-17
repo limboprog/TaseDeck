@@ -195,7 +195,7 @@ function handleToolsCall(name, args) {
   }
 }
 
-function handleRequest(msg) {
+async function handleRequest(msg) {
   const { id, method, params } = msg;
   requestCount += 1;
   log("INFO", "request", { id, method });

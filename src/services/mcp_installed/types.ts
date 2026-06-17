@@ -1,4 +1,27 @@
+import type { ConfigInput } from "../mcp_registry/parser";
+import type { RunCommandsState } from "./runCommands";
+
 export type McpServerType = "local" | "remote";
+
+export type McpEnvVariableRow = {
+  id: string;
+  name: string;
+  value: string;
+};
+
+export type McpHeaderVariableRow = {
+  id: string;
+  name: string;
+  value: string;
+};
+
+export type McpServerAnalysis = {
+  runCommands: RunCommandsState;
+  configInputs: ConfigInput[];
+  envVariables: McpEnvVariableRow[];
+  headerVariables: McpHeaderVariableRow[];
+  compiledCommandTemplate: string;
+};
 
 export type InstalledMcpServer = {
   id: number;
@@ -12,6 +35,7 @@ export type InstalledMcpServer = {
   description: string;
   createdAt: string;
   updatedAt: string;
+  analysis?: McpServerAnalysis;
 };
 
 export type InstallMcpLocalRequest = {

@@ -2,6 +2,7 @@ pub mod agent_records;
 pub mod agents;
 pub mod graphs;
 pub mod mcp;
+pub mod mcp_oauth;
 pub mod registry;
 pub mod security;
 pub mod topology;
@@ -21,9 +22,14 @@ pub use graphs::{
 };
 pub use registry::registry_http_get;
 pub use mcp::{
-    mcp_add_from_registry, mcp_add_server, mcp_compile_run_command, mcp_ensure_tools, mcp_get_server,
-    mcp_get_tools, mcp_install_local, mcp_is_running, mcp_list_servers, mcp_probe_operation,
-    mcp_refresh_tools, mcp_remove_server, mcp_start_server, mcp_stop_server, mcp_update_server,
+    mcp_add_from_registry, mcp_add_server, mcp_analyze_server, mcp_compile_run_command,
+    mcp_ensure_tools, mcp_get_server,
+    mcp_get_tools, mcp_install_local, mcp_is_running, mcp_list_run_transports, mcp_list_servers,
+    mcp_probe_operation, mcp_refresh_tools, mcp_remove_server, mcp_start_server, mcp_stop_server,
+    mcp_update_server,
+};
+pub use mcp_oauth::{
+    mcp_oauth_complete, mcp_oauth_get_challenge, mcp_oauth_set_api_key, mcp_oauth_start_sign_in,
 };
 pub use security::{security_initialize, security_mask_secret};
 pub use topology::{topology_get_status, topology_start, topology_stop};

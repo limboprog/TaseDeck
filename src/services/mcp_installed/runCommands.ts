@@ -1,3 +1,4 @@
+import type { HeaderVariableRow } from "./storedHeaders";
 import { listEnvKeysFromRows, parseStoredEnvRows } from "./storedEnv";
 
 export type RunCommandTransport = "stdio" | "streamable-http" | "sse";
@@ -27,6 +28,7 @@ export type RunCommandsState = {
 };
 
 export const RUN_COMMANDS_CONFIG_KEY = "__runCommands";
+export const REGISTRY_KEY_CONFIG_KEY = "__registryKey";
 
 export const TRANSPORT_LABELS: Record<RunCommandTransport, string> = {
   stdio: "stdio",
@@ -76,12 +78,54 @@ function migrateSharedArgs(
   return [];
 }
 
+function ensureUniqueRunCommandIds(state: RunCommandsState): RunCommandsState {
+  const seen = new Set<string>();
+  const commands = state.commands.map((entry) => {
+    if (!seen.has(entry.id)) {
+      seen.add(entry.id);
+      return entry;
+    }
+    const next = { ...entry, id: createId("run") };
+    seen.add(next.id);
+    return next;
+  });
+
+  let activeId = state.activeId;
+  if (activeId && !commands.some((entry) => entry.id === activeId)) {
+    activeId = commands[0]?.id ?? null;
+  }
+  if (!activeId && commands.length === 1) {
+    activeId = commands[0]?.id ?? null;
+  }
+
+  return { ...state, activeId, commands };
+}
+
+export function isRemoteRunTransport(transport: string): boolean {
+  return transport === "streamable-http" || transport === "sse";
+}
+
+export function getActiveRunCommandProfile(
+  state: RunCommandsState,
+): RunCommandProfile | null {
+  const normalized = normalizeRunCommandsState(state);
+  if (normalized.commands.length === 0) {
+    return null;
+  }
+  return (
+    normalized.commands.find((entry) => entry.id === normalized.activeId) ??
+    normalized.commands[0] ??
+    null
+  );
+}
+
 export function normalizeRunCommandsState(state: RunCommandsState): RunCommandsState {
-  const commands = state.commands.map((entry) => ({ ...entry, args: [] }));
+  const unique = ensureUniqueRunCommandIds(state);
+  const commands = unique.commands.map((entry) => ({ ...entry, args: [] }));
   return {
-    activeId: state.activeId,
+    activeId: unique.activeId,
     commands,
-    sharedArgs: migrateSharedArgs(state.commands, state.sharedArgs),
+    sharedArgs: migrateSharedArgs(unique.commands, unique.sharedArgs),
   };
 }
 
@@ -112,6 +156,134 @@ export function parseRunCommandsState(
   }
 }
 
+function appendEnabledArgsTemplate(parts: string[], args: RunCommandArg[]) {
+  for (const arg of args) {
+    if (!arg.enabled) {
+      continue;
+    }
+    const name = arg.name.trim();
+    if (!name) {
+      continue;
+    }
+    const value = arg.value.trim();
+    parts.push(value ? `${name} ${value}`.trim() : name);
+  }
+}
+
+const MCP_PROTOCOL_VERSION = "2024-11-05";
+const MCP_CLIENT_NAME = "tase-deck";
+const MCP_CLIENT_VERSION = "0.1.0";
+
+function isSendableHeaderPreview(name: string, value: string): boolean {
+  const trimmed = value.trim();
+  if (!name.trim() || !trimmed || trimmed.includes("${")) {
+    return false;
+  }
+  if (name.trim().toLowerCase() === "authorization") {
+    if (/^bearer$/i.test(trimmed)) {
+      return false;
+    }
+    const bearer = trimmed.match(/^Bearer\s+(.*)$/i);
+    if (bearer) {
+      return Boolean(bearer[1]?.trim());
+    }
+  }
+  return true;
+}
+
+function resolvePreviewHeaders(
+  headers: HeaderVariableRow[],
+  env: Record<string, string>,
+): Array<{ name: string; value: string }> {
+  const envRows = parseStoredEnvRows(env);
+  const resolved: Array<{ name: string; value: string }> = [];
+  for (const row of headers) {
+    const name = row.name.trim();
+    if (!name) {
+      continue;
+    }
+    const value = resolveEnvTemplate(row.value, env, envRows).trim();
+    if (!isSendableHeaderPreview(name, value)) {
+      continue;
+    }
+    resolved.push({ name, value });
+  }
+  return resolved;
+}
+
+/** HTTP request preview for remote MCP transports (initialize). */
+export function compileRemoteRequestPreview(
+  profile: RunCommandProfile,
+  options?: {
+    headers?: HeaderVariableRow[];
+    env?: Record<string, string>;
+  },
+): string {
+  const env = options?.env ?? {};
+  const envRows = parseStoredEnvRows(env);
+  const url = resolveEnvTemplate(profile.url ?? "", env, envRows).trim();
+  if (!url) {
+    return "";
+  }
+
+  const body = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: {
+        name: MCP_CLIENT_NAME,
+        version: MCP_CLIENT_VERSION,
+      },
+    },
+  };
+
+  const headerLines = resolvePreviewHeaders(options?.headers ?? [], env).map(
+    ({ name, value }) => `${name}: ${value}`,
+  );
+
+  return [
+    `POST ${url}`,
+    "Content-Type: application/json",
+    "Accept: application/json, text/event-stream",
+    `MCP-Protocol-Version: ${MCP_PROTOCOL_VERSION}`,
+    ...headerLines,
+    "",
+    JSON.stringify(body, null, 2),
+  ].join("\n");
+}
+
+/** Preview/storage shell line — `${var}` placeholders are kept. */
+export function compileRunCommandTemplate(
+  profile: RunCommandProfile,
+  sharedArgs: RunCommandArg[] = [],
+): string {
+  const args = sharedArgs.length > 0 ? sharedArgs : profile.args;
+
+  if (profile.transport === "streamable-http" || profile.transport === "sse") {
+    const url = (profile.url ?? "").trim();
+    if (!url) {
+      return "";
+    }
+    const parts = [
+      profile.transport === "sse" ? `sse ${url}` : `http ${url}`,
+    ];
+    appendEnabledArgsTemplate(parts, args);
+    return parts.join(" ");
+  }
+
+  const base = profile.command.trim();
+  if (!base) {
+    return "";
+  }
+
+  const parts = [base];
+  appendEnabledArgsTemplate(parts, args);
+  return parts.join(" ");
+}
+
 function appendEnabledArgs(
   parts: string[],
   args: RunCommandArg[],
@@ -122,7 +294,7 @@ function appendEnabledArgs(
     if (!arg.enabled) {
       continue;
     }
-    const name = arg.name.trim();
+    const name = resolveEnvTemplate(arg.name, env, envRows).trim();
     if (!name) {
       continue;
     }
@@ -131,6 +303,7 @@ function appendEnabledArgs(
   }
 }
 
+/** Runtime shell line with env values substituted into `${name}` placeholders. */
 export function compileRunCommandShell(
   profile: RunCommandProfile,
   env: Record<string, string>,

@@ -59,7 +59,7 @@ export function PickNodeModal({
             </Button>
           </XStack>
 
-          <YStack gap={6} maxH={320} overflow="scroll">
+          <YStack className="td-scroll-y" gap={6} maxH={320}>
             {type === "agent" ? (
               agentRecords.length === 0 ? (
                 <Text color={colors.muted} fontSize={13} px={4} py={8} select="none">

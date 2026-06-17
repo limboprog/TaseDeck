@@ -71,6 +71,11 @@ export const mcpTableBodyCell: CSSProperties = {
   borderBottom: mcpTableRowLine,
 };
 
+/** First column in stacked MCP tables (aligns with transport Type column). */
+export const mcpTableLeadingColumnStyle: CSSProperties = {
+  paddingLeft: 16,
+};
+
 export const mcpTableHeaderText: CSSProperties = {
   color: colors.muted,
   fontSize: 11,

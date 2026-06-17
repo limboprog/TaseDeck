@@ -1,28 +1,34 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { YStack } from "tamagui";
+import { useMcpTransportCatalog } from "../../services/catalog";
+import { resolveRunCommandsState } from "../../services/mcp_installed/configState";
 import {
   RUN_COMMANDS_CONFIG_KEY,
   TRANSPORT_LABELS,
-  compileRunCommandShell,
+  compileRemoteRequestPreview,
+  compileRunCommandTemplate,
   createEmptyRunCommand,
   createEmptyRunCommandArg,
+  isRemoteRunTransport,
   normalizeRunCommandsState,
   type RunCommandArg,
   type RunCommandProfile,
   type RunCommandTransport,
   type RunCommandsState,
 } from "../../services/mcp_installed/runCommands";
-import { parseStoredEnvRows } from "../../services/mcp_installed/storedEnv";
+import {
+  createEmptyHeaderRow,
+  type HeaderVariableRow,
+} from "../../services/mcp_installed/storedHeaders";
 import { colors } from "../../theme";
 import { EnvTemplateInput } from "./EnvTemplateInput";
 import { SectionLabel } from "./McpEnvVariablesInline";
 import { McpSectionHeader } from "./McpSectionHeader";
-import { mcpBlackBlock } from "./mcpTableStyles";
+import { mcpBlackBlock, mcpTableLeadingColumnStyle } from "./mcpTableStyles";
 import { McpDataTable, McpTableRow } from "./table/McpDataTable";
 import {
   McpTableAddHeader,
   McpTableCell,
-  McpTableEditableText,
   McpTableEmptyRow,
   McpTableHeaderCopy,
   McpTableHeaderLabel,
@@ -37,18 +43,27 @@ import { useMcpExpandedRow } from "./table/useMcpExpandedRow";
 
 const TRANSPORT_GRID = "40px 168px minmax(0, 1fr) 72px";
 const COMPILED_GRID = "minmax(0, 1fr)";
+const COMPILED_ROW_ID = "compiled";
 const ARG_GRID = "minmax(0, 1fr) 72px 44px";
-const TRANSPORTS: RunCommandTransport[] = ["stdio", "streamable-http", "sse"];
+const HEADER_GRID = "minmax(0, 1fr) minmax(0, 1fr) 44px";
 
-const TRANSPORT_OPTIONS = TRANSPORTS.map((transport) => ({
-  value: transport,
-  label: TRANSPORT_LABELS[transport],
-}));
+function transportLabel(
+  transport: string,
+  options: Array<{ value: string; label: string }>,
+): string {
+  return (
+    options.find((entry) => entry.value === transport)?.label ??
+    TRANSPORT_LABELS[transport as RunCommandTransport] ??
+    transport
+  );
+}
 
 type McpRunCommandsSectionProps = {
   state: RunCommandsState;
   env: Record<string, string>;
+  headers: HeaderVariableRow[];
   onChange: (state: RunCommandsState) => void;
+  onHeadersChange: (headers: HeaderVariableRow[]) => void;
 };
 
 function TransportBashTable({
@@ -57,6 +72,7 @@ function TransportBashTable({
   env,
   expandedRowId,
   composerOpen,
+  transportOptions,
   onSelect,
   onChange,
   onRemove,
@@ -70,6 +86,7 @@ function TransportBashTable({
   env: Record<string, string>;
   expandedRowId: string | null;
   composerOpen: boolean;
+  transportOptions: Array<{ value: RunCommandTransport; label: string }>;
   onSelect: (id: string) => void;
   onChange: (id: string, profile: RunCommandProfile) => void;
   onRemove: (id: string) => void;
@@ -88,7 +105,7 @@ function TransportBashTable({
         columns={[
           { key: "radio", header: "" },
           { key: "type", header: "Type", headerStyle: { paddingLeft: 16 } },
-          { key: "bash", header: "bash" },
+          { key: "bash", header: "bash/url" },
           {
             key: "add",
             header: <McpTableAddHeader onClick={onAddClick} disabled={composerOpen} />,
@@ -110,8 +127,8 @@ function TransportBashTable({
             <McpTableCell isLastRow={composerIsLastRow} style={{ paddingLeft: 16 }}>
               <McpTablePickerSelect
                 value={null}
-                options={TRANSPORT_OPTIONS}
-                onSelect={(option) => onPickTransport(option.value)}
+                options={transportOptions}
+                onSelect={(option) => onPickTransport(option.value as RunCommandTransport)}
                 placeholder="Select transport…"
                 autoOpen
               />
@@ -137,7 +154,7 @@ function TransportBashTable({
               <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded} align="center">
                 <McpTableRadio
                   checked={selected}
-                  label={`Use ${TRANSPORT_LABELS[profile.transport]} command`}
+                  label={`Use ${transportLabel(profile.transport, transportOptions)} command`}
                   onChange={() => onSelect(profile.id)}
                 />
               </McpTableCell>
@@ -147,7 +164,7 @@ function TransportBashTable({
                 style={{ paddingLeft: 16 }}
               >
                 <McpTableTransportLabel
-                  label={TRANSPORT_LABELS[profile.transport]}
+                  label={transportLabel(profile.transport, transportOptions)}
                   active={selected}
                 />
               </McpTableCell>
@@ -164,14 +181,16 @@ function TransportBashTable({
                     />
                   </div>
                 ) : (
-                  <McpTableEditableText
-                    value={bashValue}
-                    onChange={(next) => onChange(profile.id, { ...profile, command: next })}
-                    placeholder="npx -y @modelcontextprotocol/server-..."
-                    isRowExpanded={isExpanded}
-                    active={selected}
-                    onActivate={() => onSelect(profile.id)}
-                  />
+                  <div data-mcp-row-interactive style={{ width: "100%" }}>
+                    <EnvTemplateInput
+                      value={bashValue}
+                      onChange={(next) => onChange(profile.id, { ...profile, command: next })}
+                      env={env}
+                      monospace
+                      active={selected}
+                      placeholder="npx -y @modelcontextprotocol/server-... or node ${script}"
+                    />
+                  </div>
                 )}
               </McpTableCell>
               <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded} align="end">
@@ -185,6 +204,108 @@ function TransportBashTable({
         })}
       </McpDataTable>
     </div>
+  );
+}
+
+function HeadersTable({
+  headers,
+  env,
+  onChange,
+}: {
+  headers: HeaderVariableRow[];
+  env: Record<string, string>;
+  onChange: (headers: HeaderVariableRow[]) => void;
+}) {
+  const [rows, setRows] = useState(headers);
+  const skipSyncRef = useRef(false);
+
+  useEffect(() => {
+    if (skipSyncRef.current) {
+      skipSyncRef.current = false;
+      return;
+    }
+    setRows(headers);
+  }, [headers]);
+
+  const updateRows = (next: HeaderVariableRow[]) => {
+    setRows(next);
+    skipSyncRef.current = true;
+    onChange(next);
+  };
+
+  return (
+    <McpDataTable
+      gridColumns={HEADER_GRID}
+      columns={[
+        { key: "key", header: "Key", headerStyle: mcpTableLeadingColumnStyle },
+        { key: "value", header: "Value" },
+        {
+          key: "add",
+          header: (
+            <McpTableAddHeader
+              onClick={() => updateRows([...rows, createEmptyHeaderRow()])}
+            />
+          ),
+          headerStyle: { justifyContent: "flex-end" },
+        },
+      ]}
+      empty={
+        rows.length === 0 ? (
+          <McpTableEmptyRow message="No headers yet. Example: Authorization → Bearer ${api_key}" />
+        ) : undefined
+      }
+    >
+      {rows.map((header, index) => {
+        const isLastRow = index === rows.length - 1;
+        return (
+          <McpTableRow key={header.id} rowId={header.id}>
+            <McpTableCell
+              isLastRow={isLastRow}
+              style={{ ...mcpTableLeadingColumnStyle, overflow: "visible" }}
+            >
+              <div data-mcp-row-interactive style={{ width: "100%" }}>
+                <EnvTemplateInput
+                  value={header.name}
+                  onChange={(name) =>
+                    updateRows(
+                      rows.map((entry) =>
+                        entry.id === header.id ? { ...entry, name } : entry,
+                      ),
+                    )
+                  }
+                  env={env}
+                  monospace
+                  placeholder="Header name"
+                />
+              </div>
+            </McpTableCell>
+            <McpTableCell isLastRow={isLastRow} style={{ overflow: "visible" }}>
+              <div data-mcp-row-interactive style={{ width: "100%" }}>
+                <EnvTemplateInput
+                  value={header.value}
+                  onChange={(value) =>
+                    updateRows(
+                      rows.map((entry) =>
+                        entry.id === header.id ? { ...entry, value } : entry,
+                      ),
+                    )
+                  }
+                  env={env}
+                  monospace
+                  placeholder="Enter value"
+                />
+              </div>
+            </McpTableCell>
+            <McpTableCell isLastRow={isLastRow} align="end">
+              <McpTableRemove
+                onClick={() => updateRows(rows.filter((entry) => entry.id !== header.id))}
+                ariaLabel="Remove header"
+              />
+            </McpTableCell>
+          </McpTableRow>
+        );
+      })}
+    </McpDataTable>
   );
 }
 
@@ -259,20 +380,34 @@ function ArgumentsTable({
   );
 }
 
-function CompiledCommandTable({ command }: { command: string }) {
+function CompiledCommandTable({
+  command,
+  isRemote,
+}: {
+  command: string;
+  isRemote: boolean;
+}) {
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
+  useMcpExpandedRow(expandedRowId, setExpandedRowId, tableRef);
+
   const display = command.trim();
+  const sectionTitle = isRemote ? "Request" : "Compiled command";
+  const columnLabel = isRemote ? "Request" : "bash";
+  const isExpanded = expandedRowId === COMPILED_ROW_ID;
 
   return (
     <YStack gap={8}>
-      <SectionLabel>Compiled command</SectionLabel>
+      <SectionLabel>{sectionTitle}</SectionLabel>
       <McpDataTable
+        shellRef={tableRef}
         gridColumns={COMPILED_GRID}
         columns={[
           {
             key: "bash",
             header: (
               <>
-                <McpTableHeaderLabel>bash</McpTableHeaderLabel>
+                <McpTableHeaderLabel>{columnLabel}</McpTableHeaderLabel>
                 <McpTableHeaderCopy value={display} disabled={!display} />
               </>
             ),
@@ -280,13 +415,13 @@ function CompiledCommandTable({ command }: { command: string }) {
           },
         ]}
       >
-        <McpTableRow rowId="compiled">
-          <McpTableCell isLastRow>
+        <McpTableRow rowId={COMPILED_ROW_ID}>
+          <McpTableCell isLastRow isRowExpanded={isExpanded}>
             <McpTablePlainText
               value={display}
               placeholder="—"
               monospace
-              isRowExpanded
+              isRowExpanded={isExpanded}
             />
           </McpTableCell>
         </McpTableRow>
@@ -298,8 +433,19 @@ function CompiledCommandTable({ command }: { command: string }) {
 export function McpRunCommandsSection({
   state,
   env,
+  headers,
   onChange,
+  onHeadersChange,
 }: McpRunCommandsSectionProps) {
+  const transportCatalog = useMcpTransportCatalog();
+  const transportOptions = useMemo(
+    () =>
+      transportCatalog.map((entry) => ({
+        value: entry.id as RunCommandTransport,
+        label: entry.label,
+      })),
+    [transportCatalog],
+  );
   const [composerOpen, setComposerOpen] = useState(false);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -336,15 +482,19 @@ export function McpRunCommandsSection({
     state.commands[0] ??
     null;
 
-  const envRows = useMemo(() => parseStoredEnvRows(env), [env]);
   const sharedArgs = state.sharedArgs ?? [];
+  const isRemote =
+    activeProfile != null && isRemoteRunTransport(activeProfile.transport);
 
   const compiledCommand = useMemo(() => {
     if (!activeProfile) {
       return "";
     }
-    return compileRunCommandShell(activeProfile, env, envRows, sharedArgs);
-  }, [activeProfile, env, envRows, sharedArgs]);
+    if (activeProfile.transport !== "stdio") {
+      return compileRemoteRequestPreview(activeProfile, { headers, env });
+    }
+    return compileRunCommandTemplate(activeProfile, sharedArgs);
+  }, [activeProfile, sharedArgs, headers, env]);
 
   return (
     <YStack gap={8}>
@@ -355,6 +505,7 @@ export function McpRunCommandsSection({
         activeId={state.activeId}
         env={env}
         expandedRowId={expandedRowId}
+        transportOptions={transportOptions}
         onSelect={(id) => onChange({ ...state, activeId: id })}
         onChange={updateProfile}
         onRemove={removeProfile}
@@ -366,14 +517,25 @@ export function McpRunCommandsSection({
       />
 
       {state.commands.length > 0 ? (
-        <ArgumentsTable
-          args={sharedArgs}
-          env={env}
-          onChange={(nextArgs) => onChange({ ...state, sharedArgs: nextArgs })}
-        />
+        isRemote ? (
+          <HeadersTable
+            headers={headers}
+            env={env}
+            onChange={onHeadersChange}
+          />
+        ) : (
+          <ArgumentsTable
+            args={sharedArgs}
+            env={env}
+            onChange={(nextArgs) => onChange({ ...state, sharedArgs: nextArgs })}
+          />
+        )
       ) : null}
 
-      <CompiledCommandTable command={compiledCommand} />
+      <CompiledCommandTable
+        command={compiledCommand}
+        isRemote={activeProfile != null && activeProfile.transport !== "stdio"}
+      />
     </YStack>
   );
 }
@@ -381,28 +543,13 @@ export function McpRunCommandsSection({
 export function runCommandsFromValues(
   values: Record<string, string>,
   fallbackRunCommand: string,
+  jsonConfig = "",
 ): RunCommandsState {
-  const raw = values[RUN_COMMANDS_CONFIG_KEY];
-  if (raw?.trim()) {
-    try {
-      const parsed = JSON.parse(raw) as RunCommandsState;
-      if (parsed?.commands?.length) {
-        return normalizeRunCommandsState({
-          activeId: parsed.activeId ?? parsed.commands[0]?.id ?? null,
-          commands: parsed.commands,
-          sharedArgs: Array.isArray(parsed.sharedArgs) ? parsed.sharedArgs : [],
-        });
-      }
-    } catch {
-      /* migrate below */
-    }
-  }
-  if (!fallbackRunCommand.trim()) {
-    return { activeId: null, commands: [], sharedArgs: [] };
-  }
-  const profile = createEmptyRunCommand("stdio");
-  profile.command = fallbackRunCommand;
-  return { activeId: profile.id, commands: [profile], sharedArgs: [] };
+  return resolveRunCommandsState({
+    values,
+    runCommand: fallbackRunCommand,
+    jsonConfig,
+  });
 }
 
 export function mergeRunCommandsIntoValues(

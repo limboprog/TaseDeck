@@ -7,7 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { IoAdd, IoCopy, IoCopyOutline, IoFolder } from "../../../icons";
+import { IoAdd, IoCheckmark, IoCopy, IoCopyOutline, IoFolder } from "../../../icons";
 import { LoaderSpinner } from "../../../components/LoaderSpinner";
 import { TablePickerSearch, TablePickerSelect } from "../../../components/TablePicker";
 import type {
@@ -472,18 +472,23 @@ export function McpTableSave({
         data-mcp-row-interactive
         onClick={onClick}
         disabled={disabled}
+        aria-label="Save"
         style={{
+          width: 28,
+          height: 28,
           border: "none",
+          borderRadius: 6,
           background: "transparent",
           color: colors.accent,
-          fontSize: 12,
-          fontWeight: 600,
           cursor: disabled ? "not-allowed" : "pointer",
-          padding: "2px 4px",
+          padding: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           opacity: disabled ? 0.35 : 1,
         }}
       >
-        Save
+        <IoCheckmark size={14} />
       </button>
     </McpTableFirstLine>
   );
@@ -507,9 +512,11 @@ export function McpTableToggle({
 
 export function McpTableRunAction({
   loading,
+  disabled = false,
   onClick,
 }: {
   loading: boolean;
+  disabled?: boolean;
   onClick: (event: MouseEvent) => void;
 }) {
   return (
@@ -522,15 +529,17 @@ export function McpTableRunAction({
         <button
           type="button"
           data-mcp-row-interactive
+          disabled={disabled}
           onClick={onClick}
           style={{
             border: "none",
             background: "transparent",
-            color: colors.accent,
+            color: disabled ? `${colors.accent}66` : colors.accent,
             fontSize: 12,
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: disabled ? "default" : "pointer",
             padding: 0,
+            opacity: disabled ? 0.55 : 1,
           }}
         >
           Run

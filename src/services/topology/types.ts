@@ -1,4 +1,4 @@
-export type AgentKind = "cursor" | "claude-code" | "antigravity" | "copilot";
+export type AgentKind = string;
 
 export type TopologyNodeType = "agent" | "mcp";
 
@@ -12,6 +12,10 @@ export type TopologyNode = {
   /** DB `agents.id` — required for server-side graph links. */
   agentRecordId?: number;
   mcpServerId?: number;
+  /** Standalone MCP run state (default: active). Block members use `block.memberRunning`. */
+  mcpActive?: boolean;
+  /** Restored when a standalone MCP→agent edge is re-enabled. */
+  mcpActiveSnapshot?: boolean;
   expanded?: boolean;
   blockId?: string;
 };

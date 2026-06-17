@@ -1,25 +1,24 @@
+import {
+  agentLabelFromCatalog,
+  catalogEntryForKind as catalogEntryForKindFromStore,
+  catalogEntryForLabel as catalogEntryForLabelFromStore,
+  getAgentCatalogSync,
+} from "../catalog/agentCatalog";
 import type { AgentCatalogEntry, AgentKind } from "./types";
 
-/** Built-in agents available in the name picker. */
-export const AGENT_CATALOG: AgentCatalogEntry[] = [
-  { kind: "cursor", label: "Cursor" },
-  { kind: "claude-code", label: "Claude Code" },
-  { kind: "antigravity", label: "Antigravity" },
-  { kind: "copilot", label: "Copilot" },
-];
+/** @deprecated Prefer `getAgentCatalogSync()` / `useAgentCatalog()` from catalog service. */
+export function getAgentCatalog(): AgentCatalogEntry[] {
+  return getAgentCatalogSync();
+}
 
 export function agentLabel(kind: AgentKind) {
-  return AGENT_CATALOG.find((entry) => entry.kind === kind)?.label ?? kind;
+  return agentLabelFromCatalog(kind);
 }
 
 export function catalogEntryForLabel(label: string): AgentCatalogEntry | undefined {
-  const normalized = label.trim().toLowerCase();
-  return AGENT_CATALOG.find(
-    (entry) =>
-      entry.label.toLowerCase() === normalized || entry.kind.toLowerCase() === normalized,
-  );
+  return catalogEntryForLabelFromStore(label);
 }
 
 export function catalogEntryForKind(kind: AgentKind): AgentCatalogEntry | undefined {
-  return AGENT_CATALOG.find((entry) => entry.kind === kind);
+  return catalogEntryForKindFromStore(kind);
 }

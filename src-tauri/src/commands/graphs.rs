@@ -9,7 +9,7 @@ use tauri::State;
 
 #[tauri::command]
 pub fn graph_get_state(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     client_id: String,
     name: String,
 ) -> AppResult<GraphState> {
@@ -18,7 +18,7 @@ pub fn graph_get_state(
 
 #[tauri::command]
 pub fn graph_save_links(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     run_store: State<'_, Arc<TopologyRunStore>>,
     client_id: String,
@@ -32,16 +32,25 @@ pub fn graph_save_links(
 }
 
 #[tauri::command]
-pub fn graph_list_placeable_agents(db: State<'_, Database>) -> AppResult<Vec<AgentRecord>> {
+pub fn graph_list_placeable_agents(db: State<'_, Arc<Database>>) -> AppResult<Vec<AgentRecord>> {
     Ok(db.list_agent_records()?)
 }
 
 #[tauri::command]
-pub fn graph_list_placeable_mcp_ids(db: State<'_, Database>) -> AppResult<Vec<i64>> {
-    list_graph_eligible_mcp_ids(&db)
+pub async fn graph_list_placeable_mcp_ids(
+    db: State<'_, Arc<Database>>,
+    store: State<'_, Arc<McpToolsStore>>,
+) -> AppResult<Vec<i64>> {
+    let db = Arc::clone(db.inner());
+    let store = Arc::clone(store.inner());
+    tauri::async_runtime::spawn_blocking(move || list_graph_eligible_mcp_ids(&db, &store))
+        .await
+        .map_err(|error| {
+            crate::error::AppError::Message(format!("failed to probe MCP servers: {error}"))
+        })?
 }
 
 #[tauri::command]
-pub fn graph_delete(db: State<'_, Database>, client_id: String) -> AppResult<bool> {
+pub fn graph_delete(db: State<'_, Arc<Database>>, client_id: String) -> AppResult<bool> {
     Ok(db.delete_graph_by_client_id(&client_id)?)
 }

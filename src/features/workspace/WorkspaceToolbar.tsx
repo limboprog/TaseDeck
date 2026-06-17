@@ -1,6 +1,5 @@
 import { MdOutlineJoinLeft } from "../../icons";
-import { Button, XStack } from "tamagui";
-import { colors, tamaguiSurfaces } from "../../theme";
+import { WorkspaceIconButton } from "./workspaceIconButton";
 
 type WorkspaceToolbarProps = {
   groupToolActive: boolean;
@@ -13,35 +12,15 @@ export function WorkspaceToolbar({ groupToolActive, onToggleGroupTool }: Workspa
     : "Group — выделите область на холсте с MCP-серверами";
 
   return (
-    <XStack
-      items="center"
-      p={4}
-      rounded={8}
-      borderWidth={1}
-      borderColor={groupToolActive ? colors.accent : tamaguiSurfaces.activeBg}
-      bg={groupToolActive ? tamaguiSurfaces.accentTintBg : tamaguiSurfaces.controlBg}
-    >
-      <div title={tooltip}>
-        <Button
-          unstyled
-          width={32}
-          height={32}
-          rounded={7}
-          hoverStyle={{ bg: tamaguiSurfaces.activeBg }}
-          onPress={onToggleGroupTool}
-          aria-label={tooltip}
-          aria-pressed={groupToolActive}
-        >
-          <XStack
-            flex={1}
-            items="center"
-            justify="center"
-            style={{ color: groupToolActive ? colors.accent : colors.foreground }}
-          >
-            <MdOutlineJoinLeft size={18} />
-          </XStack>
-        </Button>
-      </div>
-    </XStack>
+    <div title={tooltip}>
+      <WorkspaceIconButton
+        active={groupToolActive}
+        onPress={onToggleGroupTool}
+        aria-label={tooltip}
+        aria-pressed={groupToolActive}
+      >
+        <MdOutlineJoinLeft size={18} />
+      </WorkspaceIconButton>
+    </div>
   );
 }

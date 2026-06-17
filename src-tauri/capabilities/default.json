@@ -6,6 +6,9 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "deep-link:default",
+    "core:menu:allow-new",
+    "core:menu:allow-popup"
   ]
 }

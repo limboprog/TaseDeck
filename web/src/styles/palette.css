@@ -1,0 +1,36 @@
+:root {
+  /* Surfaces */
+  --color-surface: #07080a;
+  --color-surface-raised: #0e1014;
+
+  /* Typography */
+  --color-ink: #f5f7fa;
+  --color-ink-muted: rgba(245, 247, 250, 0.68);
+  --color-ink-faint: rgba(245, 247, 250, 0.42);
+
+  /* Glass — solid gray rims */
+  --color-glass-border: #525861;
+  --color-glass-fill: rgba(255, 255, 255, 0.02);
+  --color-glass-highlight: rgba(255, 255, 255, 0.08);
+  --color-glass-border-dense: #525861;
+  --color-glass-fill-dense: rgba(10, 12, 16, 0.82);
+  --color-glass-highlight-dense: rgba(255, 255, 255, 0.12);
+
+  /* Accent */
+  --color-accent: #6ea8ff;
+  --color-accent-soft: rgba(110, 168, 255, 0.22);
+
+  /* Radii */
+  --radius-glass: 1.25rem;
+  --radius-pill: 9999px;
+
+  /* Shadows */
+  --shadow-glass: 0 12px 40px -20px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 80px -20px rgba(110, 168, 255, 0.35);
+
+  /* Page backdrop — flat dark, no top glow */
+  --gradient-page: none;
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+}

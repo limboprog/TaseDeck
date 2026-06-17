@@ -138,3 +138,14 @@ impl AgentRecord {
         self.id == 0
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLogEntry {
+    pub id: u64,
+    pub mcp_name: String,
+    pub tool_name: String,
+    pub success: bool,
+    pub result: String,
+    pub created_at: String,
+}

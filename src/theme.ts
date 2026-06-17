@@ -15,7 +15,8 @@ const shared = {
   accent: "#8B5CF6",
   error: "#EF4444",
   errorSoft: "#f87171",
-  warning: "#F59E0B",
+  warning: "#FACC15",
+  warningSoft: "#FDE047",
   success: "#4ADE80",
   star: "#FBBF24",
 } as const;
@@ -80,6 +81,8 @@ const darkCssVars: Record<string, string> = {
   "--td-market-installed-bg": "rgba(34, 197, 94, 0.18)",
   "--td-market-installed-border": "rgba(74, 222, 128, 0.38)",
   "--td-market-card-hover-shadow": "0 0 3px rgba(0, 0, 0, 0.32)",
+  "--td-warning": "#FACC15",
+  "--td-warning-soft": "#FDE047",
 };
 
 const lightCssVars: Record<string, string> = {
@@ -142,6 +145,8 @@ const lightCssVars: Record<string, string> = {
   "--td-market-installed-bg": "rgba(34, 197, 94, 0.14)",
   "--td-market-installed-border": "rgba(22, 163, 74, 0.35)",
   "--td-market-card-hover-shadow": "0 0 3px rgba(15, 17, 20, 0.16)",
+  "--td-warning": "#CA8A04",
+  "--td-warning-soft": "#EAB308",
 };
 
 const schemeVars: Record<ColorScheme, Record<string, string>> = {
@@ -173,7 +178,8 @@ export const colors = {
   accent: shared.accent,
   error: shared.error,
   errorSoft: shared.errorSoft,
-  warning: shared.warning,
+  warning: cssVar("--td-warning"),
+  warningSoft: cssVar("--td-warning-soft"),
   success: shared.success,
   glassFillTop: cssVar("--td-glass-fill-top"),
   glassFillBottom: cssVar("--td-glass-fill-bottom"),

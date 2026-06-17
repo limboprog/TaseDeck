@@ -1,0 +1,116 @@
+/**
+ * Layout utilities for Tauri WebView2 (especially Windows).
+ * Phantom scrollbars often come from flex subpixel overflow or `overflow: scroll`.
+ */
+
+html[data-theme="dark"] {
+  --td-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --td-scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+}
+
+html[data-theme="light"] {
+  --td-scrollbar-thumb: rgba(15, 17, 20, 0.22);
+  --td-scrollbar-thumb-hover: rgba(15, 17, 20, 0.36);
+}
+
+/* Flex column chain — use on stack roots (pages, panels). */
+.td-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Panels that must never scroll (default for cards, shells, tables). */
+.td-clip {
+  overflow: hidden;
+  overflow: clip;
+  min-width: 0;
+  min-height: 0;
+}
+
+.td-clip::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Explicit scroll regions — `auto`, not `scroll` (Windows always shows scroll tracks). */
+.td-scroll-y {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-width: 0;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+.td-scroll {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+.td-scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+/* Thin scrollbars only inside intentional scroll areas. */
+.td-scroll-y,
+.td-scroll,
+.td-scroll-x {
+  scrollbar-width: thin;
+  scrollbar-color: var(--td-scrollbar-thumb) transparent;
+}
+
+.td-scroll-y::-webkit-scrollbar,
+.td-scroll::-webkit-scrollbar,
+.td-scroll-x::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.td-scroll-y::-webkit-scrollbar-thumb,
+.td-scroll::-webkit-scrollbar-thumb,
+.td-scroll-x::-webkit-scrollbar-thumb {
+  background-color: var(--td-scrollbar-thumb);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.td-scroll-y::-webkit-scrollbar-thumb:hover,
+.td-scroll::-webkit-scrollbar-thumb:hover,
+.td-scroll-x::-webkit-scrollbar-thumb:hover {
+  background-color: var(--td-scrollbar-thumb-hover);
+}
+
+.td-scroll-y::-webkit-scrollbar-track,
+.td-scroll::-webkit-scrollbar-track,
+.td-scroll-x::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Flex children: allow shrinking so content does not force parent scrollbars. */
+.td-stack > *,
+.td-clip > .td-stack,
+.td-scroll-y > * {
+  min-width: 0;
+}
+
+/* Topology graph — expandable + control (width then height, overlapped). */
+.topology-add-control {
+  transition:
+    width 0.14s ease,
+    height 0.16s ease 0.04s;
+}
+
+.topology-add-control:not(.is-open) {
+  transition:
+    height 0.12s ease,
+    width 0.14s ease 0.06s;
+}

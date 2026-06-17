@@ -6,13 +6,18 @@ import {
   mergeUniqueEntries,
   normalizeSearch,
 } from "./searchCore";
+import {
+  MARKET_FETCH_BATCH_MAX,
+  MARKET_PAGE_SIZE,
+  MARKET_PREFETCH_AHEAD_PAGES,
+  MARKET_PREFETCH_BEHIND_PAGES,
+} from "./registryConstants";
 import type { McpListResult, McpServerEntry, McpSourceId } from "./types";
 
 const CATALOG_SOURCE: McpSourceId = "all";
-const PAGE_SIZE = 60;
+const PAGE_SIZE = MARKET_PAGE_SIZE;
 const SEARCH_DEBOUNCE_MS = 200;
 const FIRST_CHAR_DEBOUNCE_MS = 60;
-const PAGE_WINDOW_RADIUS = 1;
 
 export type SearchSession = {
   search: string;
@@ -147,7 +152,7 @@ function applySourceFilter(
   return filterByConnection(entries, source);
 }
 
-function getAncestorEntries(search: string): McpServerEntry[] | null {
+function getAncestorSession(search: string): SearchSession | null {
   const normalized = normalizeSearch(search);
   if (!normalized) {
     return null;
@@ -155,18 +160,22 @@ function getAncestorEntries(search: string): McpServerEntry[] | null {
 
   const exact = getCatalogSession(search);
   if (exact) {
-    return exact.servers;
+    return exact;
   }
 
   for (let length = normalized.length - 1; length >= 1; length -= 1) {
     const ancestor = normalized.slice(0, length);
     const session = sessions.get(sessionKey(CATALOG_SOURCE, ancestor));
     if (session?.servers.length) {
-      return session.servers;
+      return session;
     }
   }
 
   return null;
+}
+
+function getAncestorEntries(search: string): McpServerEntry[] | null {
+  return getAncestorSession(search)?.servers ?? null;
 }
 
 function shouldUseCachedSession(session: SearchSession | undefined) {
@@ -258,7 +267,11 @@ function trimPageWindowCache(centerPage: number) {
   }
 
   const keep = new Set<number>();
-  for (let offset = -PAGE_WINDOW_RADIUS; offset <= PAGE_WINDOW_RADIUS; offset += 1) {
+  for (
+    let offset = -MARKET_PREFETCH_BEHIND_PAGES;
+    offset <= MARKET_PREFETCH_AHEAD_PAGES;
+    offset += 1
+  ) {
     const page = centerPage + offset;
     if (page >= 0) {
       keep.add(page);
@@ -320,11 +333,11 @@ function buildView(
   }
 
   const filtered = filterAndSortEntries(ancestorEntries, query);
-  const ancestorSession = getCatalogSession(query);
+  const ancestorSession = getAncestorSession(query);
 
   return {
     servers: applySourceFilter(filtered, source),
-    hasMore: Boolean(ancestorSession?.hasMore),
+    hasMore: ancestorSession?.hasMore ?? filtered.length > 0,
     isCachePreview: filtered.length > 0,
   };
 }
@@ -409,8 +422,31 @@ async function ensureFilteredCount(
     guard < 40
   ) {
     guard += 1;
-    await fetchFromNetwork(searchId, currentQuery, "append");
-    view = buildView(currentQuery, currentSource);
+    const prevLen = view.servers.length;
+    const remaining = minCount - view.servers.length;
+    const batchLimit = Math.min(
+      MARKET_FETCH_BATCH_MAX,
+      Math.max(PAGE_SIZE, remaining),
+    );
+    const mode = getCatalogSession(currentQuery) ? "append" : "reset";
+    const fetched = await fetchFromNetwork(searchId, currentQuery, mode, {
+      limit: batchLimit,
+    });
+    if (!fetched) {
+      break;
+    }
+
+    const nextView = buildView(currentQuery, currentSource);
+    if (nextView.servers.length === prevLen && nextView.hasMore) {
+      const session = getCatalogSession(currentQuery);
+      if (session) {
+        setCatalogSession(currentQuery, { ...session, hasMore: false });
+      }
+      view = buildView(currentQuery, currentSource);
+      break;
+    }
+
+    view = nextView;
   }
 
   return view;
@@ -425,17 +461,27 @@ async function warmPageWindow(searchId: number, page: number) {
   const cache = ensurePageWindowCache(currentQuery, currentSource);
   let view = buildView(currentQuery, currentSource);
   const currentSlice = getPageSlice(view, currentPage, cache);
+  const showLoading = pageNeedsMoreData(currentPage, view) && currentSlice.length === 0;
 
-  if (pageNeedsMoreData(currentPage, view)) {
-    emitState(searchId, { loading: currentSlice.length === 0, error: null });
-    const needCount = (currentPage + 1) * PAGE_SIZE;
-    view = await ensureFilteredCount(searchId, needCount);
-    if (searchId !== latestSearchId) {
-      return;
-    }
+  if (showLoading) {
+    emitState(searchId, { loading: true, error: null });
   }
 
-  emitState(searchId, { loading: false });
+  try {
+    if (pageNeedsMoreData(currentPage, view)) {
+      const needCount = (currentPage + 1) * PAGE_SIZE;
+      view = await ensureFilteredCount(searchId, needCount);
+    }
+  } catch {
+    if (searchId === latestSearchId) {
+      emitState(searchId, { loading: false });
+    }
+    return;
+  }
+
+  if (searchId === latestSearchId) {
+    emitState(searchId, { loading: false });
+  }
 }
 
 async function prefetchAdjacentPages(searchId: number) {
@@ -443,8 +489,8 @@ async function prefetchAdjacentPages(searchId: number) {
     return;
   }
 
-  const nextPage = currentPage + PAGE_WINDOW_RADIUS;
-  const needCount = (nextPage + 1) * PAGE_SIZE;
+  const maxAheadPage = currentPage + MARKET_PREFETCH_AHEAD_PAGES;
+  const needCount = (maxAheadPage + 1) * PAGE_SIZE;
   let view = await ensureFilteredCount(searchId, needCount);
 
   if (searchId !== latestSearchId) {
@@ -452,14 +498,15 @@ async function prefetchAdjacentPages(searchId: number) {
   }
 
   const cache = ensurePageWindowCache(currentQuery, currentSource);
-  if (nextPage >= 0) {
-    getPageSlice(view, nextPage, cache);
+  for (let page = currentPage + 1; page <= maxAheadPage; page += 1) {
+    getPageSlice(view, page, cache);
   }
 
-  const prevPage = currentPage - PAGE_WINDOW_RADIUS;
-  if (prevPage >= 0) {
-    view = buildView(currentQuery, currentSource);
-    getPageSlice(view, prevPage, cache);
+  for (let page = currentPage - MARKET_PREFETCH_BEHIND_PAGES; page < currentPage; page += 1) {
+    if (page >= 0) {
+      view = buildView(currentQuery, currentSource);
+      getPageSlice(view, page, cache);
+    }
   }
 }
 
@@ -488,20 +535,29 @@ async function fetchFromNetwork(
   searchId: number,
   query: string,
   mode: "reset" | "append",
-) {
+  options?: { limit?: number },
+): Promise<boolean> {
   if (searchId !== latestSearchId) {
-    return;
+    return false;
   }
 
   await waitUntilNetworkIdle();
 
-  if (searchId !== latestSearchId || networkBusy) {
-    return;
+  if (searchId !== latestSearchId) {
+    return false;
+  }
+
+  while (networkBusy) {
+    await sleep(25);
+    if (searchId !== latestSearchId) {
+      return false;
+    }
   }
 
   networkBusy = true;
+  const showLoading = mode === "reset";
 
-  if (mode === "reset") {
+  if (showLoading) {
     emitState(searchId, { loading: true, error: null });
   }
 
@@ -512,11 +568,11 @@ async function fetchFromNetwork(
       search: query,
       source: CATALOG_SOURCE,
       cursor: mode === "append" ? existing?.nextCursor : undefined,
-      limit: PAGE_SIZE,
+      limit: options?.limit ?? PAGE_SIZE,
     });
 
     if (searchId !== latestSearchId) {
-      return;
+      return false;
     }
 
     const session =
@@ -524,7 +580,11 @@ async function fetchFromNetwork(
         ? appendPage(query, result.servers, result.nextCursor)
         : replacePage(query, result.servers, result.nextCursor);
 
-    resetPageWindowCache();
+    if (mode === "reset") {
+      resetPageWindowCache();
+    } else if (pageWindowCache) {
+      pageWindowCache.pages.clear();
+    }
 
     emitState(
       searchId,
@@ -535,9 +595,10 @@ async function fetchFromNetwork(
       },
       { source: CATALOG_SOURCE, search: query, session },
     );
+    return true;
   } catch (err) {
     if (searchId !== latestSearchId) {
-      return;
+      return false;
     }
 
     const message =
@@ -547,6 +608,7 @@ async function fetchFromNetwork(
       loading: false,
       error: message,
     });
+    return false;
   } finally {
     networkBusy = false;
   }
@@ -566,17 +628,22 @@ function handleSearch(searchId: number, query: string, source: McpSourceId) {
 
   const view = buildView(query, source);
   const exactSession = getCatalogSession(query);
+  const normalizedQuery = normalizeSearch(query);
   const canServeFromCache = Boolean(
     exactSession && shouldUseCachedSession(exactSession),
   );
+  const needsExactFetch =
+    normalizedQuery.length > 0 && !exactSession?.loaded;
   const needsFetch =
+    needsExactFetch ||
     !canServeFromCache ||
     pageNeedsMoreData(0, view) ||
     (view.servers.length === 0 && Boolean(exactSession?.hasMore));
 
   emitState(searchId, {
     isCachePreview: view.isCachePreview,
-    loading: view.servers.length === 0 && needsFetch,
+    loading:
+      needsFetch && (needsExactFetch || view.servers.length === 0),
     error: null,
   });
 

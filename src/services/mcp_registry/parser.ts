@@ -492,17 +492,19 @@ function collectRemoteInputs(remote: McpRemote, index: number): ConfigInput[] {
   const inputs: ConfigInput[] = [];
 
   for (const header of remote.headers ?? []) {
-    if (header.isRequired) {
-      inputs.push({
-        id: `header:${index}:${header.name}`,
-        name: header.name,
-        description: header.description,
-        isRequired: true,
-        isSecret: Boolean(header.isSecret),
-        defaultValue: header.value,
-        source: "header",
-      });
+    const name = header.name?.trim();
+    if (!name) {
+      continue;
     }
+    inputs.push({
+      id: `header:${name}`,
+      name,
+      description: header.description,
+      isRequired: Boolean(header.isRequired),
+      isSecret: Boolean(header.isSecret),
+      defaultValue: header.value,
+      source: "header",
+    });
   }
 
   for (const [name, variable] of Object.entries(remote.variables ?? {})) {
@@ -630,6 +632,7 @@ type McpJsonServerEntry = {
   env?: Record<string, string>;
   url?: string;
   type?: string;
+  headers?: Record<string, string>;
 };
 
 function defaultMcpServerKey(serverName: string) {
@@ -665,7 +668,44 @@ export function rebuildInstalledMcpConfig(
 
   const entry: McpJsonServerEntry = { ...(servers[key] ?? {}) };
   if (entry.url) {
-    return { jsonConfig, runCommand: "" };
+    const headers: Record<string, string> = {};
+    const rawHeaders = values.__headers;
+    if (rawHeaders?.trim()) {
+      try {
+        const parsed = JSON.parse(rawHeaders) as Array<{ name?: string; value?: string }>;
+        if (Array.isArray(parsed)) {
+          for (const row of parsed) {
+            const rawName = row.name?.trim();
+            if (!rawName) {
+              continue;
+            }
+            const legacy = rawName.match(/^(\d+):(.+)$/);
+            const name = legacy?.[2]?.trim() || rawName;
+            headers[name] = row.value ?? "";
+          }
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    for (const [configKey, configValue] of Object.entries(values)) {
+      if (!configKey.startsWith("header:")) {
+        continue;
+      }
+      const rest = configKey.slice("header:".length);
+      const legacy = rest.match(/^(\d+):(.+)$/);
+      const name = (legacy?.[2] ?? rest).trim();
+      if (name && !(name in headers)) {
+        headers[name] = configValue;
+      }
+    }
+    if (Object.keys(headers).length > 0) {
+      entry.headers = headers;
+    } else {
+      delete entry.headers;
+    }
+    const nextJson = JSON.stringify({ mcpServers: { [key]: entry } }, null, 2);
+    return { jsonConfig: nextJson, runCommand: "" };
   }
 
   const env: Record<string, string> = { ...(entry.env ?? {}) };

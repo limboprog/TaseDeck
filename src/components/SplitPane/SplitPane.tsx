@@ -52,21 +52,21 @@ export function SplitPane({
   return (
     <div
       ref={containerRef}
+      className="td-clip"
       style={{
         display: "flex",
         flex: 1,
         minHeight: 0,
         minWidth: 0,
         width: "100%",
-        overflow: "hidden",
       }}
     >
       <div
+        className="td-clip td-stack"
         style={{
           width: `${leftRatio * 100}%`,
           minWidth: minLeft,
           minHeight: 0,
-          overflow: "hidden",
           display: "flex",
           flexDirection: "column",
         }}
@@ -92,11 +92,11 @@ export function SplitPane({
       />
 
       <div
+        className="td-clip td-stack"
         style={{
           width: `${rightRatio * 100}%`,
           minWidth: minRight,
           minHeight: 0,
-          overflow: "hidden",
           display: "flex",
           flexDirection: "column",
         }}

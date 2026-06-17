@@ -58,7 +58,7 @@ export function buildLinkInputs(
       inputs.push({
         agentId,
         mcpServerId: source.mcpServerId,
-        active: edgeEnabled,
+        active: edgeEnabled ? source.mcpActive !== false : false,
         edgeEnabled,
       });
     }
@@ -72,8 +72,9 @@ export function applyServerLinksToTopology(
   blocks: TopologyBlock[],
   links: GraphServerLink[],
   defaultAgentRecordId?: number,
-): { edges: TopologyEdge[]; blocks: TopologyBlock[] } {
+): { edges: TopologyEdge[]; blocks: TopologyBlock[]; nodes: TopologyNode[] } {
   const edges: TopologyEdge[] = [];
+  const nextNodes = nodes.map((node) => ({ ...node }));
   const nextBlocks = blocks.map((block) => ({
     ...block,
     memberRunning: { ...block.memberRunning },
@@ -135,7 +136,7 @@ export function applyServerLinksToTopology(
     }
 
     for (const [mcpServerId, link] of linkByMcpId) {
-      const mcpNode = nodes.find(
+      const mcpNode = nextNodes.find(
         (node) =>
           node.type === "mcp" &&
           !node.blockId &&
@@ -144,6 +145,7 @@ export function applyServerLinksToTopology(
       if (!mcpNode) {
         continue;
       }
+      mcpNode.mcpActive = link.active;
       edges.push({
         id: `srv-${link.id}`,
         sourceId: mcpNode.id,
@@ -153,5 +155,5 @@ export function applyServerLinksToTopology(
     }
   }
 
-  return { edges, blocks: nextBlocks };
+  return { edges, blocks: nextBlocks, nodes: nextNodes };
 }

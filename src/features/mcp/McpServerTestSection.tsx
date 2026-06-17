@@ -1,4 +1,6 @@
-import { useCallback, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { parseAuthRequiredError } from "../../services/mcp_installed/oauthApi";
+import type { McpAuthChallenge } from "../../services/mcp_installed/oauthApi";
 import { flushSync } from "react-dom";
 import {
   probeMcpOperation,
@@ -19,7 +21,7 @@ import {
 import { useMcpExpandedRow } from "./table/useMcpExpandedRow";
 
 const TEST_GRID = "max-content max-content minmax(0, 1fr) max-content";
-const TEST_COLUMN_GAP = 26;
+const TEST_COLUMN_PAD = 26;
 const TEST_ACTION_PAD_LEFT = 18;
 
 type TestRowDef = {
@@ -58,21 +60,40 @@ function statusColor(status: RowState["status"]): string {
   return colors.muted;
 }
 
+const INITIAL_ROWS = Object.fromEntries(
+  TEST_ROWS.map((row) => [row.id, { status: "idle" as const, result: "" }]),
+);
+
 type McpServerTestSectionProps = {
   serverId: number;
+  disabled?: boolean;
+  resetKey?: string;
+  onAuthRequired?: (challenge: McpAuthChallenge) => void;
 };
 
-export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
+export function McpServerTestSection({
+  serverId,
+  disabled = false,
+  resetKey = "",
+  onAuthRequired,
+}: McpServerTestSectionProps) {
   const tableRef = useRef<HTMLDivElement>(null);
-  const [rows, setRows] = useState<Record<string, RowState>>(() =>
-    Object.fromEntries(TEST_ROWS.map((row) => [row.id, { status: "idle", result: "" }])),
-  );
+  const [rows, setRows] = useState<Record<string, RowState>>(() => ({ ...INITIAL_ROWS }));
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   useMcpExpandedRow(expandedRowId, setExpandedRowId, tableRef);
 
+  useEffect(() => {
+    setRows({ ...INITIAL_ROWS });
+    setExpandedRowId(null);
+    setCopiedRowId(null);
+  }, [resetKey, serverId]);
+
   const runTest = useCallback(
     async (row: TestRowDef, event: MouseEvent) => {
+      if (disabled) {
+        return;
+      }
       event.stopPropagation();
       flushSync(() => {
         setRows((current) => ({
@@ -83,11 +104,15 @@ export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
 
       try {
         const response: McpProbeResult = await probeMcpOperation(serverId, row.probeOp);
+        const authChallenge = parseAuthRequiredError(response.result);
+        if (authChallenge?.flow === "oauth" || authChallenge?.flow === "api_key") {
+          onAuthRequired?.(authChallenge);
+        }
         setRows((current) => ({
           ...current,
           [row.id]: {
             status: response.success ? "success" : "error",
-            result: response.result,
+            result: authChallenge ? "" : response.result,
           },
         }));
       } catch (cause) {
@@ -98,7 +123,7 @@ export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
         }));
       }
     },
-    [serverId],
+    [disabled, onAuthRequired, serverId],
   );
 
   const copyResult = useCallback(async (rowId: string, text: string, event: MouseEvent) => {
@@ -122,11 +147,10 @@ export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
         shellRef={tableRef}
         shellStyle={{ marginTop: 8 }}
         gridColumns={TEST_GRID}
-        columnGap={TEST_COLUMN_GAP}
         columns={[
-          { key: "op", header: "Operation" },
-          { key: "status", header: "Status" },
-          { key: "result", header: "Result" },
+          { key: "op", header: "Operation", headerStyle: { paddingRight: TEST_COLUMN_PAD } },
+          { key: "status", header: "Status", headerStyle: { paddingRight: TEST_COLUMN_PAD } },
+          { key: "result", header: "Result", headerStyle: { paddingRight: 8 } },
           {
             key: "action",
             header: "Test",
@@ -144,7 +168,11 @@ export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
 
           return (
             <McpTableRow key={row.id} rowId={row.id}>
-              <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded}>
+              <McpTableCell
+                isLastRow={isLastRow}
+                isRowExpanded={isExpanded}
+                style={{ paddingRight: TEST_COLUMN_PAD }}
+              >
                 <McpTablePlainText
                   value={row.operation}
                   fontSize={13}
@@ -152,7 +180,11 @@ export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
                   isRowExpanded={isExpanded}
                 />
               </McpTableCell>
-              <McpTableCell isLastRow={isLastRow} isRowExpanded={isExpanded}>
+              <McpTableCell
+                isLastRow={isLastRow}
+                isRowExpanded={isExpanded}
+                style={{ paddingRight: TEST_COLUMN_PAD }}
+              >
                 <McpTableFirstLine>
                   <span
                     style={{
@@ -203,6 +235,7 @@ export function McpServerTestSection({ serverId }: McpServerTestSectionProps) {
               >
                 <McpTableRunAction
                   loading={state.status === "running"}
+                  disabled={disabled}
                   onClick={(event) => void runTest(row, event)}
                 />
               </McpTableCell>

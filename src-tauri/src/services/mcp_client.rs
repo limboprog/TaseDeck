@@ -1,16 +1,20 @@
 use crate::db::McpServer;
+use crate::services::mcp_protocol::{
+    build_json_rpc_request, execute_with_retry, format_json_rpc_failure, McpRetrySession,
+    CLIENT_NAME, CLIENT_VERSION, DEFAULT_PROTOCOL_VERSION,
+};
+use crate::services::mcp_remote_transport::{remote_http_timeout, RemoteAuthContext, RemoteMcpIo};
+use crate::services::oauth2::OAuthStore;
+use crate::services::mcp_run_command::{compile_run_command_from_config_values, McpActiveTransport, resolve_active_transport};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
-const CLIENT_NAME: &str = "tase-deck";
-const CLIENT_VERSION: &str = "0.1.0";
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,17 +46,28 @@ struct StoredSession {
     snapshot: McpServerToolsSnapshot,
     child: Option<Child>,
     io: Option<Mutex<McpSessionIo>>,
+    remote: Option<Mutex<RemoteMcpIo>>,
 }
 
 pub struct McpToolsStore {
     sessions: Mutex<HashMap<i64, StoredSession>>,
+    oauth: OnceLock<Arc<OAuthStore>>,
 }
 
 impl McpToolsStore {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            oauth: OnceLock::new(),
         }
+    }
+
+    pub fn attach_oauth(&self, oauth: Arc<OAuthStore>) {
+        let _ = self.oauth.set(oauth);
+    }
+
+    fn oauth(&self) -> Option<Arc<OAuthStore>> {
+        self.oauth.get().cloned()
     }
 
     pub fn register_server(&self, server: &McpServer) {
@@ -63,7 +78,8 @@ impl McpToolsStore {
             stop_session(&mut sessions, server.id);
         }
 
-        let session = match connect_stdio_session(server) {
+        let oauth = self.oauth();
+        let session = match connect_stdio_session(server, oauth.as_ref()) {
             Ok(session) => session,
             Err(error) => StoredSession {
                 snapshot: McpServerToolsSnapshot {
@@ -74,6 +90,7 @@ impl McpToolsStore {
                 },
                 child: None,
                 io: None,
+                remote: None,
             },
         };
 
@@ -83,6 +100,9 @@ impl McpToolsStore {
     }
 
     pub fn unregister_server(&self, server_id: i64) {
+        if let Some(oauth) = self.oauth() {
+            oauth.clear_server_session(server_id);
+        }
         if let Ok(mut sessions) = self.sessions.lock() {
             stop_session(&mut sessions, server_id);
         }
@@ -93,7 +113,7 @@ impl McpToolsStore {
             return false;
         };
         sessions.get(&server_id).is_some_and(|session| {
-            session.io.is_some() && session.snapshot.error.is_none()
+            (session.io.is_some() || session.remote.is_some()) && session.snapshot.error.is_none()
         })
     }
 
@@ -135,23 +155,29 @@ impl McpToolsStore {
                 .unwrap_or_else(|| "MCP server session has an error".to_string()));
         }
 
-        let io_mutex = session
-            .io
-            .as_ref()
-            .ok_or_else(|| format!("MCP server {server_id} is not connected"))?;
-        let mut io = io_mutex
-            .lock()
-            .map_err(|_| "MCP session I/O lock poisoned".to_string())?;
-
-        let request_id = io.next_id;
-        io.next_id = io.next_id.saturating_add(1);
-
         let params = json!({
             "name": tool_name,
             "arguments": arguments,
         });
 
-        let response = request_json_io(&mut io, request_id, "tools/call", params)?;
+        let response = if let Some(remote_mutex) = session.remote.as_ref() {
+            let mut remote = remote_mutex
+                .lock()
+                .map_err(|_| "MCP remote session lock poisoned".to_string())?;
+            let request_id = remote.next_request_id();
+            remote.request(request_id, "tools/call", params)?
+        } else {
+            let io_mutex = session
+                .io
+                .as_ref()
+                .ok_or_else(|| format!("MCP server {server_id} is not connected"))?;
+            let mut io = io_mutex
+                .lock()
+                .map_err(|_| "MCP session I/O lock poisoned".to_string())?;
+            let request_id = io.next_id;
+            io.next_id = io.next_id.saturating_add(1);
+            request_json_io(&mut io, request_id, "tools/call", params)?
+        };
 
         if let Some(error) = response.get("error") {
             return Err(format!("tools/call failed: {error}"));
@@ -173,18 +199,24 @@ impl McpToolsStore {
             .get_mut(&server_id)
             .ok_or_else(|| format!("MCP server {server_id} is not running"))?;
 
-        let io_mutex = session
-            .io
-            .as_ref()
-            .ok_or_else(|| format!("MCP server {server_id} is not connected"))?;
-        let mut io = io_mutex
-            .lock()
-            .map_err(|_| "MCP session I/O lock poisoned".to_string())?;
-
-        let request_id = io.next_id;
-        io.next_id = io.next_id.saturating_add(1);
-
-        let response = request_json_io(&mut io, request_id, "tools/list", json!({}))?;
+        let response = if let Some(remote_mutex) = session.remote.as_ref() {
+            let mut remote = remote_mutex
+                .lock()
+                .map_err(|_| "MCP remote session lock poisoned".to_string())?;
+            let request_id = remote.next_request_id();
+            remote.request(request_id, "tools/list", json!({}))?
+        } else {
+            let io_mutex = session
+                .io
+                .as_ref()
+                .ok_or_else(|| format!("MCP server {server_id} is not connected"))?;
+            let mut io = io_mutex
+                .lock()
+                .map_err(|_| "MCP session I/O lock poisoned".to_string())?;
+            let request_id = io.next_id;
+            io.next_id = io.next_id.saturating_add(1);
+            request_json_io(&mut io, request_id, "tools/list", json!({}))?
+        };
 
         let tools = parse_tools_list_response(response)?;
         session.snapshot.tools = tools;
@@ -195,6 +227,11 @@ impl McpToolsStore {
 
 fn stop_session(sessions: &mut HashMap<i64, StoredSession>, server_id: i64) {
     if let Some(mut session) = sessions.remove(&server_id) {
+        if let Some(remote_mutex) = session.remote.take() {
+            if let Ok(mut remote) = remote_mutex.into_inner() {
+                remote.terminate_session();
+            }
+        }
         if let Some(mut child) = session.child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -209,13 +246,17 @@ enum Transport {
         args: Vec<String>,
         env: HashMap<String, String>,
     },
-    UnsupportedRemote {
+    Remote {
         url: String,
         transport_type: String,
+        headers: HashMap<String, String>,
     },
 }
 
-fn connect_stdio_session(server: &McpServer) -> Result<StoredSession, String> {
+fn connect_stdio_session(
+    server: &McpServer,
+    oauth: Option<&Arc<OAuthStore>>,
+) -> Result<StoredSession, String> {
     let transport = parse_transport(server)?;
     match transport {
         Transport::Stdio { .. } => {
@@ -257,31 +298,81 @@ fn connect_stdio_session(server: &McpServer) -> Result<StoredSession, String> {
                 },
                 child: Some(child),
                 io: Some(Mutex::new(io)),
+                remote: None,
             })
         }
-        Transport::UnsupportedRemote { url, transport_type } => Err(format!(
-            "remote transport {transport_type} ({url}) is not supported yet"
-        )),
+        Transport::Remote {
+            url,
+            transport_type,
+            headers,
+        } => {
+            let auth = oauth.map(|store| RemoteAuthContext {
+                server: server.clone(),
+                oauth: Arc::clone(store),
+            });
+            let mut remote = RemoteMcpIo::new(url.clone(), headers, auth);
+            let tools = remote.handshake_and_list_tools().map_err(|error| {
+                format!("remote transport {transport_type} ({url}) failed: {error}")
+            })?;
+            Ok(StoredSession {
+                snapshot: McpServerToolsSnapshot {
+                    server_id: server.id,
+                    server_name: server.name.clone(),
+                    tools,
+                    error: None,
+                },
+                child: None,
+                io: None,
+                remote: Some(Mutex::new(remote)),
+            })
+        }
     }
 }
 
 fn parse_transport(server: &McpServer) -> Result<Transport, String> {
+    if let Ok(Some(active)) = resolve_active_transport(&server.config_values) {
+        return match active {
+            McpActiveTransport::Remote {
+                transport_type,
+                url,
+            } => {
+                if url.trim().is_empty() {
+                    return Err("active remote profile has no URL".to_string());
+                }
+                Ok(Transport::Remote {
+                    url: url.trim().to_string(),
+                    transport_type,
+                    headers: find_remote_headers(server, &url),
+                })
+            }
+            McpActiveTransport::Stdio => parse_stdio_transport(server),
+        };
+    }
+
+    if let Some(remote) = parse_remote_from_run_command(server.run_command.trim()) {
+        return Ok(remote);
+    }
+
     let config_raw = server.json_config.trim();
     if config_raw.is_empty() || config_raw == "{}" {
-        return parse_run_command(server);
+        return parse_run_command_stdio(server);
     }
 
     let entry = parse_mcp_server_entry(config_raw)?;
 
     if let Some(url) = entry.get("url").and_then(Value::as_str) {
-        let transport_type = entry
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("http")
-            .to_string();
-        return Ok(Transport::UnsupportedRemote {
-            url: url.to_string(),
+        let transport_type = normalize_remote_transport_type(
+            entry.get("type").and_then(Value::as_str),
+        );
+        let headers = entry
+            .get("headers")
+            .and_then(Value::as_object)
+            .map(|map| resolve_header_map(map, &server.config_values))
+            .unwrap_or_default();
+        return Ok(Transport::Remote {
+            url: url.trim().to_string(),
             transport_type,
+            headers,
         });
     }
 
@@ -309,6 +400,48 @@ fn parse_transport(server: &McpServer) -> Result<Transport, String> {
         .unwrap_or_default();
 
     Ok(Transport::Stdio { command, args, env })
+}
+
+fn parse_stdio_transport(server: &McpServer) -> Result<Transport, String> {
+    if let Ok(compiled) = compile_run_command_from_config_values(&server.config_values) {
+        if !compiled.trim().is_empty() {
+            return parse_run_command_stdio(&McpServer {
+                run_command: compiled,
+                ..server.clone()
+            });
+        }
+    }
+
+    parse_run_command_stdio(server)
+}
+
+fn find_remote_headers(server: &McpServer, url: &str) -> HashMap<String, String> {
+    let target = url.trim();
+    if target.is_empty() {
+        return HashMap::new();
+    }
+
+    let Ok(parsed) = serde_json::from_str::<Value>(server.json_config.trim()) else {
+        return HashMap::new();
+    };
+
+    let Some(servers) = parsed.get("mcpServers").and_then(Value::as_object) else {
+        return HashMap::new();
+    };
+
+    for entry in servers.values() {
+        let Some(entry_url) = entry.get("url").and_then(Value::as_str) else {
+            continue;
+        };
+        if entry_url.trim() != target {
+            continue;
+        }
+        if let Some(headers) = entry.get("headers").and_then(Value::as_object) {
+            return resolve_header_map(headers, &server.config_values);
+        }
+    }
+
+    HashMap::new()
 }
 
 fn parse_mcp_server_entry(config_raw: &str) -> Result<Value, String> {
@@ -341,7 +474,136 @@ fn env_value_to_string(value: &Value) -> Option<String> {
     }
 }
 
-fn parse_run_command(server: &McpServer) -> Result<Transport, String> {
+fn normalize_remote_transport_type(raw: Option<&str>) -> String {
+    match raw.unwrap_or("streamable-http").trim().to_ascii_lowercase().replace('_', "-")
+        .as_str()
+    {
+        "sse" => "sse".to_string(),
+        "http" | "streamable-http" | "streamable" => "streamable-http".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn parse_remote_from_run_command(shell: &str) -> Option<Transport> {
+    let trimmed = shell.trim();
+    if let Some(url) = trimmed.strip_prefix("http ") {
+        let url = url.trim();
+        if !url.is_empty() {
+            return Some(Transport::Remote {
+                url: url.to_string(),
+                transport_type: "streamable-http".to_string(),
+                headers: HashMap::new(),
+            });
+        }
+    }
+    if let Some(url) = trimmed.strip_prefix("sse ") {
+        let url = url.trim();
+        if !url.is_empty() {
+            return Some(Transport::Remote {
+                url: url.to_string(),
+                transport_type: "sse".to_string(),
+                headers: HashMap::new(),
+            });
+        }
+    }
+    None
+}
+
+fn is_sendable_header_value(key: &str, value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains("${") {
+        return false;
+    }
+    if key.eq_ignore_ascii_case("authorization") {
+        return is_usable_authorization_value(trimmed);
+    }
+    true
+}
+
+fn is_usable_authorization_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains("${") {
+        return false;
+    }
+    if let Some(token) = trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))
+    {
+        return !token.trim().is_empty();
+    }
+    true
+}
+
+fn resolve_header_map(
+    map: &serde_json::Map<String, Value>,
+    config_values: &str,
+) -> HashMap<String, String> {
+    let env = flat_config_values(config_values);
+    map.iter()
+        .filter_map(|(key, value)| {
+            let text = value.as_str()?;
+            let resolved = resolve_env_placeholders(text, &env);
+            if !is_sendable_header_value(key, &resolved) {
+                return None;
+            }
+            Some((key.clone(), resolved))
+        })
+        .collect()
+}
+
+fn flat_config_values(config_values: &str) -> HashMap<String, String> {
+    if config_values.trim().is_empty() {
+        return HashMap::new();
+    }
+    serde_json::from_str(config_values).unwrap_or_default()
+}
+
+fn resolve_env_placeholders(template: &str, env: &HashMap<String, String>) -> String {
+    let mut result = template.to_string();
+    let mut bindings: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let Some(raw) = env.get("__envVariables") {
+        if let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(raw) {
+            for row in rows {
+                let Some(name) = row.get("name").and_then(|value| value.as_str()) else {
+                    continue;
+                };
+                let name = name.trim();
+                if name.is_empty() || !seen.insert(name.to_string()) {
+                    continue;
+                }
+                let value = row
+                    .get("value")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                bindings.push((name.to_string(), value));
+            }
+        }
+    }
+
+    for (key, value) in env {
+        if key.starts_with("__") {
+            continue;
+        }
+        let name = key.strip_prefix("env:").unwrap_or(key.as_str()).trim();
+        if name.is_empty() || !seen.insert(name.to_string()) {
+            continue;
+        }
+        bindings.push((name.to_string(), value.clone()));
+    }
+
+    for (name, value) in bindings {
+        let needle = format!("${{{name}}}");
+        if result.contains(&needle) {
+            result = result.replace(&needle, &value);
+        }
+    }
+    result
+}
+
+fn parse_run_command_stdio(server: &McpServer) -> Result<Transport, String> {
     let shell = server.run_command.trim();
     if shell.is_empty() {
         return Err("run_command and json_config are empty".to_string());
@@ -504,18 +766,24 @@ fn child_exit_detail(child: &mut Child) -> String {
 struct McpMessageReader<R: Read> {
     inner: BufReader<R>,
     buffer: Vec<u8>,
+    timeout: Duration,
 }
 
 impl<R: Read> McpMessageReader<R> {
     fn new(inner: R) -> Self {
+        Self::with_timeout(inner, IO_TIMEOUT)
+    }
+
+    fn with_timeout(inner: R, timeout: Duration) -> Self {
         Self {
             inner: BufReader::new(inner),
             buffer: Vec::new(),
+            timeout,
         }
     }
 
     fn read_message(&mut self) -> Result<Value, String> {
-        let deadline = Instant::now() + IO_TIMEOUT;
+        let deadline = Instant::now() + self.timeout;
 
         loop {
             if let Some(message) = try_parse_buffered_message(&mut self.buffer)? {
@@ -608,7 +876,7 @@ fn write_stdio_message(stdin: &mut impl Write, message: &Value) -> Result<(), St
     stdin.flush().map_err(|error| error.to_string())
 }
 
-fn handshake_initialize_only(child: &mut Child) -> Result<String, String> {
+fn handshake_initialize_only(child: &mut Child, io_timeout: Duration) -> Result<String, String> {
     let stdin = child
         .stdin
         .as_mut()
@@ -618,21 +886,15 @@ fn handshake_initialize_only(child: &mut Child) -> Result<String, String> {
         .take()
         .ok_or_else(|| "MCP process stdout is not available".to_string())?;
 
-    let mut reader = McpMessageReader::new(stdout);
+    let mut reader = McpMessageReader::with_timeout(stdout, io_timeout);
 
-    let init_params = json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": {},
-        "clientInfo": {
-            "name": CLIENT_NAME,
-            "version": CLIENT_VERSION
-        }
-    });
-
-    let init_response = request_json(stdin, &mut reader, 1, "initialize", init_params)?;
-    if init_response.get("error").is_some() {
-        return Err(format!("initialize failed: {}", init_response));
-    }
+    let mut session = McpRetrySession::new(CLIENT_NAME, CLIENT_VERSION);
+    let init_response = execute_with_retry(
+        "initialize",
+        |ctx| Some(ctx.initialize_params()),
+        |params| request_json_optional(stdin, &mut reader, 1, "initialize", params),
+        &mut session,
+    )?;
 
     write_notification(stdin, "notifications/initialized", json!({}))?;
 
@@ -643,29 +905,30 @@ fn handshake_initialize_only(child: &mut Child) -> Result<String, String> {
     let protocol = init_response
         .pointer("/result/protocolVersion")
         .and_then(Value::as_str)
-        .unwrap_or(PROTOCOL_VERSION);
+        .unwrap_or(DEFAULT_PROTOCOL_VERSION);
 
     Ok(format!("initialize OK — {server_name} (protocol {protocol})"))
 }
 
 fn handshake_and_list_tools(io: &mut McpSessionIo) -> Result<Vec<McpToolInfo>, String> {
-    let init_params = json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": {},
-        "clientInfo": {
-            "name": CLIENT_NAME,
-            "version": CLIENT_VERSION
-        }
-    });
+    let mut session = McpRetrySession::new(CLIENT_NAME, CLIENT_VERSION);
 
-    let init_response = request_json_io(io, 1, "initialize", init_params)?;
-    if init_response.get("error").is_some() {
-        return Err(format!("initialize failed: {}", init_response));
-    }
+    execute_with_retry(
+        "initialize",
+        |ctx| Some(ctx.initialize_params()),
+        |params| request_json_io_optional(io, 1, "initialize", params),
+        &mut session,
+    )?;
 
     write_notification(&mut io.stdin, "notifications/initialized", json!({}))?;
 
-    let tools_response = request_json_io(io, 2, "tools/list", json!({}))?;
+    let tools_response = execute_with_retry(
+        "tools/list",
+        |ctx| ctx.tools_list_params(),
+        |params| request_json_io_optional(io, 2, "tools/list", params),
+        &mut session,
+    )?;
+
     parse_tools_list_response(tools_response)
 }
 
@@ -676,7 +939,14 @@ pub struct McpProbeResult {
     pub result: String,
 }
 
-pub fn probe_mcp_operation(server: &McpServer, operation: &str) -> McpProbeResult {
+pub fn probe_mcp_operation(
+    server: &McpServer,
+    operation: &str,
+    oauth: Option<Arc<OAuthStore>>,
+    timeout: Option<Duration>,
+) -> McpProbeResult {
+    let io_timeout = timeout.unwrap_or(IO_TIMEOUT);
+    let remote_timeout = remote_http_timeout(timeout);
     let transport = match parse_transport(server) {
         Ok(transport) => transport,
         Err(error) => {
@@ -687,16 +957,52 @@ pub fn probe_mcp_operation(server: &McpServer, operation: &str) -> McpProbeResul
         }
     };
 
-    match &transport {
-        Transport::UnsupportedRemote { url, transport_type } => {
-            return McpProbeResult {
+    if let Transport::Remote {
+        url,
+        transport_type,
+        headers,
+    } = &transport
+    {
+        let auth = oauth.map(|store| RemoteAuthContext {
+            server: server.clone(),
+            oauth: store,
+        });
+        let mut remote = RemoteMcpIo::with_timeout(url.clone(), headers.clone(), auth, remote_timeout);
+        let probe_result = match operation {
+            "initialize" => remote
+                .request_with_retry(1, "initialize", |ctx| Some(ctx.initialize_params()))
+                .and_then(|response| {
+                    let server_name = response
+                        .pointer("/result/serverInfo/name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let protocol = response
+                        .pointer("/result/protocolVersion")
+                        .and_then(Value::as_str)
+                        .unwrap_or(DEFAULT_PROTOCOL_VERSION);
+                    Ok(format!("initialize OK — {server_name} (protocol {protocol})"))
+                }),
+            "tools_list" | "list" => remote.handshake_and_list_tools().map(|tools| {
+                if tools.is_empty() {
+                    "tools/list OK — 0 tools".to_string()
+                } else {
+                    let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+                    format!("tools/list OK — {} tools: {}", tools.len(), names.join(", "))
+                }
+            }),
+            _ => Err(format!("unknown probe operation: {operation}")),
+        };
+
+        return match probe_result {
+            Ok(result) => McpProbeResult {
+                success: true,
+                result,
+            },
+            Err(error) => McpProbeResult {
                 success: false,
-                result: format!(
-                    "remote transport {transport_type} ({url}) is not supported yet"
-                ),
-            };
-        }
-        Transport::Stdio { .. } => {}
+                result: format!("remote transport {transport_type} ({url}) failed: {error}"),
+            },
+        };
     }
 
     let mut child = match spawn_mcp_child(server, &transport) {
@@ -710,7 +1016,7 @@ pub fn probe_mcp_operation(server: &McpServer, operation: &str) -> McpProbeResul
     };
 
     let probe_result = match operation {
-        "initialize" => handshake_initialize_only(&mut child).map(|summary| summary),
+        "initialize" => handshake_initialize_only(&mut child, io_timeout).map(|summary| summary),
         "tools_list" | "list" => match child.stdin.take() {
             None => Err("MCP process stdin is not available".to_string()),
             Some(stdin) => match child.stdout.take() {
@@ -718,7 +1024,7 @@ pub fn probe_mcp_operation(server: &McpServer, operation: &str) -> McpProbeResul
                 Some(stdout) => {
                     let mut io = McpSessionIo {
                         stdin,
-                        reader: McpMessageReader::new(stdout),
+                        reader: McpMessageReader::with_timeout(stdout, io_timeout),
                         next_id: 3,
                     };
                     handshake_and_list_tools(&mut io).map(|tools| {
@@ -757,21 +1063,27 @@ pub fn probe_mcp_operation(server: &McpServer, operation: &str) -> McpProbeResul
     }
 }
 
-fn request_json(
+fn request_json_optional(
     stdin: &mut impl Write,
     reader: &mut McpMessageReader<impl Read>,
     id: u64,
     method: &str,
-    params: Value,
+    params: Option<Value>,
 ) -> Result<Value, String> {
-    let request = json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": method,
-        "params": params
-    });
+    let request = build_json_rpc_request(id, method, params);
     write_stdio_message(stdin, &request)?;
     read_response_for_id(reader, id)
+}
+
+fn request_json_io_optional(
+    io: &mut McpSessionIo,
+    id: u64,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    let request = build_json_rpc_request(id, method, params);
+    write_stdio_message(&mut io.stdin, &request)?;
+    read_response_for_id(&mut io.reader, id)
 }
 
 fn request_json_io(
@@ -780,14 +1092,7 @@ fn request_json_io(
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    let request = json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": method,
-        "params": params
-    });
-    write_stdio_message(&mut io.stdin, &request)?;
-    read_response_for_id(&mut io.reader, id)
+    request_json_io_optional(io, id, method, Some(params))
 }
 
 fn write_notification(
@@ -824,7 +1129,7 @@ fn message_id_matches(message: &Value, id: u64) -> bool {
 
 fn parse_tools_list_response(response: Value) -> Result<Vec<McpToolInfo>, String> {
     if let Some(error) = response.get("error") {
-        return Err(format!("tools/list failed: {error}"));
+        return Err(format_json_rpc_failure("tools/list", &json!({"error": error})));
     }
 
     let tools = response

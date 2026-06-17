@@ -60,7 +60,10 @@ export function McpDataTable({
   }
 
   return (
-    <div ref={shellRef} style={{ ...mcpBlackBlock, ...shellStyle }}>
+    <div
+      ref={shellRef}
+      style={{ ...mcpBlackBlock, overflowAnchor: "none", ...shellStyle }}
+    >
       {grid}
     </div>
   );

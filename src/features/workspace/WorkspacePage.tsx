@@ -1,13 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Text, YStack } from "tamagui";
 import { SplitPane } from "../../components/SplitPane/SplitPane";
+import {
+  defaultWorkspacePageSession,
+  readPageSession,
+  writePageSession,
+} from "../../session/appSession";
 import { deleteGraph } from "../../services/topology/graphApi";
 import { useTopologies } from "../../services/topology";
 import { colors } from "../../theme";
-import { CreateTopologyModal } from "./CreateTopologyModal";
 import { McpDetailPanel } from "./McpDetailPanel";
 import { TopologyGraph } from "./TopologyGraph";
 import { TopologyList } from "./TopologyList";
+
+const WORKSPACE_PAGE_SESSION_KEY = "workspace";
 
 type WorkspacePageProps = {
   workspaceActive?: boolean;
@@ -21,9 +27,35 @@ export function WorkspacePage({ workspaceActive = true }: WorkspacePageProps) {
     removeTopology,
     toggleRunning,
   } = useTopologies();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    readPageSession(WORKSPACE_PAGE_SESSION_KEY, defaultWorkspacePageSession()).selectedTopologyId,
+  );
   const [selectedMcpServerId, setSelectedMcpServerId] = useState<number | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    writePageSession(WORKSPACE_PAGE_SESSION_KEY, { selectedTopologyId: selectedId });
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!workspaceActive) {
+      return;
+    }
+    const session = readPageSession(WORKSPACE_PAGE_SESSION_KEY, defaultWorkspacePageSession());
+    if (session.selectedTopologyId && session.selectedTopologyId !== selectedId) {
+      setSelectedId(session.selectedTopologyId);
+      setSelectedMcpServerId(null);
+    }
+  }, [workspaceActive, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      return;
+    }
+    if (!topologies.some((topology) => topology.id === selectedId)) {
+      setSelectedId(null);
+      setSelectedMcpServerId(null);
+    }
+  }, [selectedId, topologies]);
 
   const selectedTopology =
     topologies.find((topology) => topology.id === selectedId) ?? null;
@@ -54,7 +86,7 @@ export function WorkspacePage({ workspaceActive = true }: WorkspacePageProps) {
               setSelectedId(id);
               setSelectedMcpServerId(null);
             }}
-            onCreateClick={() => setModalOpen(true)}
+            onCreate={handleCreate}
             onToggleRunning={toggleRunning}
             onDelete={handleDelete}
           />
@@ -83,12 +115,6 @@ export function WorkspacePage({ workspaceActive = true }: WorkspacePageProps) {
             </YStack>
           )
         }
-      />
-
-      <CreateTopologyModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onCreate={handleCreate}
       />
     </YStack>
   );

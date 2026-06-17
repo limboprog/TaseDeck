@@ -1,7 +1,9 @@
 import { IoPlay, IoPrism, IoSquare, IoTrash } from "../../icons";
-import { Button, Text, XStack } from "tamagui";
+import { Text, XStack } from "tamagui";
 import type { Topology } from "../../services/topology";
-import { borders, colors, dangerAlpha, surfaces, tamaguiSurfaces } from "../../theme";
+import { colors, dangerAlpha } from "../../theme";
+import { TopologyTableIconButton } from "./TopologyTableIconButton";
+import { topologyRowChrome, topologyRowHoverStyle } from "./topologyRowStyles";
 
 type TopologyRowProps = {
   topology: Topology;
@@ -27,11 +29,8 @@ export function TopologyRow({
       justify="space-between"
       gap={12}
       cursor="pointer"
-      bg={selected ? tamaguiSurfaces.activeBg : surfaces.subtle}
-      borderWidth={1}
-      borderColor={selected ? borders.selected : tamaguiSurfaces.controlHoverBg}
-      rounded={8}
-      hoverStyle={{ bg: tamaguiSurfaces.controlHoverBg }}
+      style={topologyRowChrome(selected)}
+      hoverStyle={topologyRowHoverStyle}
       onPress={onSelect}
     >
       <XStack flex={1} items="center" gap={8} minW={0}>
@@ -47,40 +46,46 @@ export function TopologyRow({
         </Text>
       </XStack>
 
-      <XStack items="center" gap={6} shrink={0}>
-        <Button
-          unstyled
-          width={28}
-          height={28}
-          rounded={6}
-          hoverStyle={{ bg: tamaguiSurfaces.activeBg }}
+      <XStack items="center" gap={6} shrink={0} height={28}>
+        <TopologyTableIconButton
+          aria-label={topology.running ? "Stop topology" : "Run topology"}
           onPress={(event) => {
             event.stopPropagation();
             onToggleRunning();
           }}
-          aria-label={topology.running ? "Stop topology" : "Run topology"}
         >
-          <XStack flex={1} items="center" justify="center" style={{ color: colors.muted }}>
-            {topology.running ? <IoSquare size={14} /> : <IoPlay size={14} />}
-          </XStack>
-        </Button>
+          {topology.running ? <IoSquare size={14} /> : <IoPlay size={14} />}
+        </TopologyTableIconButton>
 
-        <Button
-          unstyled
-          width={28}
-          height={28}
-          rounded={6}
-          hoverStyle={{ bg: dangerAlpha[12] }}
-          onPress={(event) => {
+        <button
+          type="button"
+          aria-label="Delete topology"
+          onClick={(event) => {
             event.stopPropagation();
             onDelete();
           }}
-          aria-label="Delete topology"
+          onMouseEnter={(event) => {
+            event.currentTarget.style.background = dangerAlpha[12];
+          }}
+          onMouseLeave={(event) => {
+            event.currentTarget.style.background = "transparent";
+          }}
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            border: "none",
+            background: "transparent",
+            color: colors.muted,
+            cursor: "pointer",
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
         >
-          <XStack flex={1} items="center" justify="center" style={{ color: colors.muted }}>
-            <IoTrash size={14} />
-          </XStack>
-        </Button>
+          <IoTrash size={14} />
+        </button>
       </XStack>
     </XStack>
   );

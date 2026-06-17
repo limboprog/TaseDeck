@@ -130,6 +130,7 @@ impl TopologyRunStore {
         let mut status = status_for(
             db,
             store_for_status.as_ref(),
+            self,
             client_id,
             name,
             true,
@@ -176,7 +177,16 @@ impl TopologyRunStore {
             .ok()
             .and_then(|runs| runs.get(client_id).map(|run| run.bridge_port));
 
-        status_for(db, store, client_id, name, running, bridge_port, None)
+        status_for(
+            db,
+            store,
+            self,
+            client_id,
+            name,
+            running,
+            bridge_port,
+            None,
+        )
     }
 
     pub fn refresh_if_running(
@@ -205,6 +215,7 @@ impl TopologyRunStore {
 fn status_for(
     db: &Database,
     store: &McpToolsStore,
+    run_store: &TopologyRunStore,
     client_id: &str,
     name: &str,
     running: bool,

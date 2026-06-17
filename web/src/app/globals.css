@@ -1,0 +1,28 @@
+@import "../styles/palette.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+    overflow-x: clip;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply min-h-screen overflow-x-clip bg-surface font-sans text-ink;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-ink);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

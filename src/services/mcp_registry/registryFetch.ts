@@ -1,4 +1,5 @@
 import { httpGetJson, resolveRegistryUrl } from "./registryHttp";
+import { parseRegistryEntryKey } from "./searchCore";
 import type { McpListParams, McpListResult, McpServerEntry } from "./types";
 
 /** Backend catalog is kept in the repo but off by default — set `VITE_USE_MCP_BACKEND=true` to enable. */
@@ -106,4 +107,40 @@ export async function fetchCatalogPage(
   }
 
   return fetchCatalogFromRegistry(params);
+}
+
+export async function fetchRegistryServerByKey(
+  registryKey: string,
+): Promise<McpServerEntry | null> {
+  const parsed = parseRegistryEntryKey(registryKey);
+  if (!parsed) {
+    return null;
+  }
+
+  const encodedName = encodeURIComponent(parsed.name);
+  const encodedVersion = encodeURIComponent(parsed.version);
+  const paths = [
+    `/v0/servers/${encodedName}/versions/${encodedVersion}`,
+    `/v0.1/servers/${encodedName}/versions/${encodedVersion}`,
+  ];
+
+  for (const path of paths) {
+    try {
+      const data = (await httpGetJson(resolveRegistryUrl(path))) as {
+        server?: McpServerEntry["server"];
+        _meta?: Record<string, McpServerEntry["meta"]>;
+      };
+      if (!data.server) {
+        continue;
+      }
+      return normalizeRegistryItem({
+        server: data.server,
+        _meta: data._meta,
+      });
+    } catch {
+      /* try next API version */
+    }
+  }
+
+  return null;
 }

@@ -1,29 +1,42 @@
 use crate::db::{InstallMcpLocalRequest, McpServer, McpServerType};
 use crate::error::{AppError, AppResult};
-use serde::Deserialize;
+use crate::services::mcp_config_template::{
+    canonical_header_id, registry_braces_to_env_template,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RUN_COMMANDS_CONFIG_KEY: &str = "__runCommands";
+const REGISTRY_KEY_CONFIG_KEY: &str = "__registryKey";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEntry {
     pub server: RegistryServer,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryRepository {
+    pub url: String,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryServer {
     pub name: String,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub version: Option<String>,
+    pub repository: Option<RegistryRepository>,
     pub packages: Option<Vec<RegistryPackage>>,
     pub remotes: Option<Vec<RegistryRemote>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryPackage {
     pub registry_type: String,
@@ -36,7 +49,7 @@ pub struct RegistryPackage {
     pub transport: Option<RegistryTransport>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryTransport {
     #[serde(rename = "type")]
@@ -44,7 +57,7 @@ pub struct RegistryTransport {
     pub url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryArgument {
     pub name: Option<String>,
@@ -60,7 +73,7 @@ pub struct RegistryArgument {
     pub variables: Option<HashMap<String, RegistryInputVariable>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryInputVariable {
     pub description: Option<String>,
@@ -69,7 +82,7 @@ pub struct RegistryInputVariable {
     pub default: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEnvVariable {
     pub name: String,
@@ -80,7 +93,7 @@ pub struct RegistryEnvVariable {
     pub default: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryRemote {
     #[serde(rename = "type")]
@@ -90,7 +103,7 @@ pub struct RegistryRemote {
     pub variables: Option<HashMap<String, RegistryInputVariable>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryRemoteHeader {
     pub name: String,
@@ -105,9 +118,21 @@ pub enum RegistryInstallPlan {
     Remote(McpServer),
 }
 
+fn registry_entry_key(server: &RegistryServer) -> String {
+    let version = server
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest");
+    format!("{}:{}", server.name, version)
+}
+
 pub fn build_registry_install_plan(entry: RegistryEntry) -> AppResult<RegistryInstallPlan> {
     if let Some(pkg) = entry.server.packages.as_ref().and_then(|items| items.first()) {
-        return Ok(RegistryInstallPlan::Local(build_local_install(&entry.server, pkg)?));
+        let mut install = build_local_install(&entry.server, pkg)?;
+        merge_registry_remotes_into_local(&mut install.server, &entry.server)?;
+        return Ok(RegistryInstallPlan::Local(install));
     }
 
     if let Some(remote) = entry.server.remotes.as_ref().and_then(|items| items.first()) {
@@ -119,6 +144,127 @@ pub fn build_registry_install_plan(entry: RegistryEntry) -> AppResult<RegistryIn
     Err(AppError::Message(
         "This server has no addable configuration.".to_string(),
     ))
+}
+
+fn merge_registry_remotes_into_local(
+    server: &mut McpServer,
+    registry: &RegistryServer,
+) -> AppResult<()> {
+    let Some(remotes) = registry.remotes.as_ref().filter(|items| !items.is_empty()) else {
+        return Ok(());
+    };
+
+    let values: HashMap<String, String> = serde_json::from_str(&server.config_values).map_err(
+        |error| AppError::Message(format!("invalid config values: {error}")),
+    )?;
+
+    let mut mcp_servers = parse_mcp_servers_map(&server.json_config)?;
+    let mut run_commands = parse_run_commands_state(&values);
+    let mut inputs: Vec<ConfigInput> = serde_json::from_str(&server.config_inputs).unwrap_or_default();
+
+    let mut remote_profiles = Vec::new();
+
+    for (index, remote) in remotes.iter().enumerate() {
+        let remote_config = build_remote_connection(registry, remote, index, &values)?;
+        let remote_root: Value = serde_json::from_str(&remote_config).map_err(|error| {
+            AppError::Message(format!("invalid remote config json: {error}"))
+        })?;
+        if let Some(remote_servers) = remote_root.get("mcpServers").and_then(Value::as_object) {
+            for (key, value) in remote_servers {
+                mcp_servers.insert(key.clone(), value.clone());
+            }
+        }
+
+        inputs.extend(collect_remote_inputs(remote, index));
+
+        let transport = normalize_remote_transport(remote.remote_type.as_deref());
+        let profile_id = create_run_command_id("run");
+        remote_profiles.push(json!({
+            "id": profile_id,
+            "transport": transport,
+            "url": remote.url,
+            "command": "",
+            "args": [],
+        }));
+    }
+
+    run_commands.commands = remote_profiles
+        .into_iter()
+        .chain(run_commands.commands)
+        .collect();
+
+    run_commands.active_id = run_commands
+        .commands
+        .first()
+        .and_then(|entry| entry.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let mut next_values = values;
+    next_values.insert(
+        RUN_COMMANDS_CONFIG_KEY.to_string(),
+        serde_json::to_string(&run_commands).map_err(|error| {
+            AppError::Message(format!("failed to encode run commands: {error}"))
+        })?,
+    );
+
+    server.json_config = serde_json::to_string_pretty(&json!({ "mcpServers": mcp_servers }))
+        .map_err(|error| AppError::Message(format!("failed to encode mcp json: {error}")))?;
+    server.config_inputs = serde_json::to_string(&dedupe_config_inputs(inputs)).map_err(|error| {
+        AppError::Message(format!("failed to encode config inputs: {error}"))
+    })?;
+    server.config_values = serde_json::to_string(&next_values).map_err(|error| {
+        AppError::Message(format!("failed to encode config values: {error}"))
+    })?;
+
+    Ok(())
+}
+
+fn parse_mcp_servers_map(json_config: &str) -> AppResult<Map<String, Value>> {
+    let root: Value = if json_config.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(json_config).map_err(|error| {
+            AppError::Message(format!("invalid json config: {error}"))
+        })?
+    };
+    Ok(root
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default())
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct RunCommandsJson {
+    #[serde(default)]
+    active_id: Option<String>,
+    #[serde(default)]
+    commands: Vec<Value>,
+    #[serde(default)]
+    shared_args: Vec<Value>,
+}
+
+fn parse_run_commands_state(values: &HashMap<String, String>) -> RunCommandsJson {
+    values
+        .get(RUN_COMMANDS_CONFIG_KEY)
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+
+fn normalize_remote_transport(raw: Option<&str>) -> &'static str {
+    match raw.unwrap_or("streamable-http").trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "sse" => "sse",
+        _ => "streamable-http",
+    }
+}
+
+fn dedupe_config_inputs(inputs: Vec<ConfigInput>) -> Vec<ConfigInput> {
+    let mut by_id = HashMap::new();
+    for input in inputs {
+        by_id.insert(input.id.clone(), input);
+    }
+    by_id.into_values().collect()
 }
 
 fn build_local_install(
@@ -135,6 +281,10 @@ fn build_local_install(
         serde_json::to_string(&run_commands).map_err(|error| {
             AppError::Message(format!("failed to encode run commands: {error}"))
         })?,
+    );
+    config_values.insert(
+        REGISTRY_KEY_CONFIG_KEY.to_string(),
+        registry_entry_key(server),
     );
 
     Ok(InstallMcpLocalRequest {
@@ -175,7 +325,11 @@ fn build_remote_server(
     index: usize,
 ) -> AppResult<McpServer> {
     let inputs = collect_remote_inputs(remote, index);
-    let values = default_input_values(&inputs);
+    let mut values = default_input_values(&inputs);
+    values.insert(
+        REGISTRY_KEY_CONFIG_KEY.to_string(),
+        registry_entry_key(server),
+    );
     let json_config = build_remote_connection(server, remote, index, &values)?;
 
     Ok(McpServer {
@@ -209,18 +363,18 @@ fn build_remote_server(
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ConfigInput {
-    id: String,
-    name: String,
+pub(crate) struct ConfigInput {
+    pub(crate) id: String,
+    pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    is_required: bool,
-    is_secret: bool,
+    pub(crate) description: Option<String>,
+    pub(crate) is_required: bool,
+    pub(crate) is_secret: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    default_value: Option<String>,
+    pub(crate) default_value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    placeholder: Option<String>,
-    source: String,
+    pub(crate) placeholder: Option<String>,
+    pub(crate) source: String,
 }
 
 struct BuiltRun {
@@ -310,6 +464,9 @@ fn read_value(values: &HashMap<String, String>, keys: &[&str], fallback: Option<
 fn default_input_values(inputs: &[ConfigInput]) -> HashMap<String, String> {
     let mut values = HashMap::new();
     for input in inputs {
+        if input.source == "header" {
+            continue;
+        }
         if let Some(default_value) = input.default_value.as_ref().filter(|value| !value.is_empty())
         {
             values.insert(input.id.clone(), default_value.clone());
@@ -318,7 +475,7 @@ fn default_input_values(inputs: &[ConfigInput]) -> HashMap<String, String> {
     values
 }
 
-fn collect_package_inputs(pkg: &RegistryPackage) -> Vec<ConfigInput> {
+pub(crate) fn collect_package_inputs(pkg: &RegistryPackage) -> Vec<ConfigInput> {
     let mut inputs = Vec::new();
     for env in pkg.environment_variables.iter().flatten() {
         inputs.push(ConfigInput {
@@ -395,21 +552,28 @@ fn collect_argument_inputs(args: &[RegistryArgument], prefix: &str, inputs: &mut
     }
 }
 
-fn collect_remote_inputs(remote: &RegistryRemote, index: usize) -> Vec<ConfigInput> {
+pub(crate) fn collect_remote_inputs(remote: &RegistryRemote, index: usize) -> Vec<ConfigInput> {
     let mut inputs = Vec::new();
     for header in remote.headers.iter().flatten() {
-        if header.is_required.unwrap_or(false) {
-            inputs.push(ConfigInput {
-                id: format!("header:{index}:{}", header.name),
-                name: header.name.clone(),
-                description: header.description.clone(),
-                is_required: true,
-                is_secret: header.is_secret.unwrap_or(false),
-                default_value: header.value.clone(),
-                placeholder: None,
-                source: "header".to_string(),
-            });
+        let name = header.name.trim();
+        if name.is_empty() {
+            continue;
         }
+        let template = header
+            .value
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(registry_braces_to_env_template);
+        inputs.push(ConfigInput {
+            id: canonical_header_id(name),
+            name: name.to_string(),
+            description: header.description.clone(),
+            is_required: header.is_required.unwrap_or(false),
+            is_secret: header.is_secret.unwrap_or(false),
+            default_value: template,
+            placeholder: None,
+            source: "header".to_string(),
+        });
     }
     for (name, variable) in remote.variables.iter().flatten() {
         if variable.is_required.unwrap_or(false) {
@@ -653,14 +817,13 @@ fn build_remote_connection(
     let url = resolve_remote_url(remote, index, values);
     let mut headers = Map::new();
     for header in remote.headers.iter().flatten() {
-        let value = read_value(
-            values,
-            &[&format!("header:{index}:{}", header.name), &header.name],
-            header.value.as_deref(),
+        let Some(template) = header.value.as_deref().filter(|entry| !entry.is_empty()) else {
+            continue;
+        };
+        headers.insert(
+            header.name.clone(),
+            Value::String(registry_braces_to_env_template(template)),
         );
-        if let Some(value) = value.filter(|entry| !entry.is_empty()) {
-            headers.insert(header.name.clone(), Value::String(value));
-        }
     }
 
     let mut config = Map::new();
@@ -702,11 +865,14 @@ fn resolve_remote_url(remote: &RegistryRemote, index: usize, values: &HashMap<St
 }
 
 fn create_run_command_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    format!("{prefix}-{millis}")
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{millis}-{seq}")
 }
 
 fn build_registry_run_commands_state(pkg: &RegistryPackage, primary_shell: &str) -> Value {

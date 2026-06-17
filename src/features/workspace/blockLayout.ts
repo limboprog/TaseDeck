@@ -1,16 +1,25 @@
 import { createId } from "../../services/topology";
 import type { TopologyBlock, TopologyEdge, TopologyNode } from "../../services/topology";
 import { buildMemberRunningFromEdges } from "./graphConnections";
-import { NODE_HEADER_HEIGHT, NODE_WIDTH } from "./GraphNode";
+import {
+  BLOCK_CONTENT_WIDTH,
+  BLOCK_MEMBER_GAP,
+  BLOCK_MEMBER_HEIGHT,
+  BLOCK_NAME_HEIGHT,
+  BLOCK_OUTER_WIDTH,
+  BLOCK_PADDING,
+  NODE_HEADER_HEIGHT,
+  NODE_WIDTH,
+} from "./graphLayoutConstants";
 
-/** Matches node header — collapsed block keeps the same height. */
-export const BLOCK_NAME_HEIGHT = NODE_HEADER_HEIGHT;
-export const BLOCK_MEMBER_HEIGHT = 36;
-export const BLOCK_PADDING = 10;
-export const BLOCK_MEMBER_GAP = 6;
-/** Wider than a single node. */
-export const BLOCK_OUTER_WIDTH = 252;
-export const BLOCK_CONTENT_WIDTH = BLOCK_OUTER_WIDTH - BLOCK_PADDING * 2;
+export {
+  BLOCK_CONTENT_WIDTH,
+  BLOCK_MEMBER_GAP,
+  BLOCK_MEMBER_HEIGHT,
+  BLOCK_NAME_HEIGHT,
+  BLOCK_OUTER_WIDTH,
+  BLOCK_PADDING,
+} from "./graphLayoutConstants";
 
 export type Rect = {
   x: number;

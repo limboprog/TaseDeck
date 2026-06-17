@@ -52,7 +52,7 @@ pub async fn topology_stop(
 
 #[tauri::command]
 pub fn topology_get_status(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     run_store: State<'_, Arc<TopologyRunStore>>,
     client_id: String,

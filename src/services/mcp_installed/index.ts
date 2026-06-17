@@ -1,5 +1,12 @@
-export type { InstallMcpLocalRequest, InstalledMcpServer, McpServerType } from "./types";
+export type {
+  InstallMcpLocalRequest,
+  InstalledMcpServer,
+  McpEnvVariableRow,
+  McpServerAnalysis,
+  McpServerType,
+} from "./types";
 export {
+  analyzeMcpServer,
   listInstalledMcpServers,
   installLocalMcpServer,
   removeInstalledMcpServer,
@@ -7,15 +14,20 @@ export {
 } from "./api";
 export {
   buildUpdatedMcpServer,
+  getServerAnalysis,
   getServerConfigInputs,
   getServerConfigValues,
+  getServerRunCommands,
   isMcpServerConfigured,
   listConfiguredMcpServers,
   resolveServerConfigInputs,
 } from "./configState";
 export {
+  fetchRegistryEntryForInstalled,
   findRegistryEntryByPackageIdentifier,
+  findRegistryEntryByRegistryKey,
   getRegistryConfigInputsForInstalled,
+  getRegistryKeyFromInstalled,
 } from "./registryConfig";
 export {
   applyEnvRowsToConfig,

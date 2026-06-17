@@ -1,24 +1,13 @@
-use serde::{Deserialize, Serialize};
+use crate::db::{Database, UsageLogEntry};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 pub const TASEDECK_MCP_NAME: &str = "TaseDeck MCP";
 
 const MAX_ENTRIES: usize = 500;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageLogEntry {
-    pub id: u64,
-    pub mcp_name: String,
-    pub tool_name: String,
-    pub success: bool,
-    pub result: String,
-    pub created_at: String,
-}
 
 pub struct UsageLogStore {
     entries: Mutex<VecDeque<UsageLogEntry>>,
@@ -27,10 +16,17 @@ pub struct UsageLogStore {
 }
 
 impl UsageLogStore {
-    pub fn new() -> Self {
+    pub fn new(db: &Database) -> Self {
+        let (entries, next_id) = db
+            .load_usage_log()
+            .unwrap_or_else(|error| {
+                eprintln!("failed to load usage log: {error}");
+                (VecDeque::new(), 1)
+            });
+
         Self {
-            entries: Mutex::new(VecDeque::new()),
-            next_id: AtomicU64::new(1),
+            entries: Mutex::new(entries),
+            next_id: AtomicU64::new(next_id),
             app_handle: Mutex::new(None),
         }
     }
@@ -78,6 +74,16 @@ impl UsageLogStore {
             result,
             created_at: chrono_lite_now(),
         };
+
+        if let Ok(guard) = self.app_handle.lock() {
+            if let Some(app) = guard.as_ref() {
+                if let Some(db) = app.try_state::<Database>() {
+                    if let Err(error) = db.insert_usage_log_entry(&entry) {
+                        eprintln!("failed to persist usage log entry: {error}");
+                    }
+                }
+            }
+        }
 
         if let Ok(mut entries) = self.entries.lock() {
             entries.push_back(entry);

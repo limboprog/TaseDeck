@@ -1,19 +1,21 @@
 use crate::core::shell::run_shell_checked;
-use crate::db::mcp_config::is_mcp_server_configured;
+use crate::db::mcp_config::can_attempt_mcp_tools;
 use crate::db::{Database, InstallMcpLocalRequest, McpServer, McpServerType};
 use crate::error::AppResult;
 use crate::services::{
-    apply_compiled_run_command, build_registry_install_plan, compile_run_command_template_from_config_values,
-    mcp_server_for_runtime, probe_mcp_operation, reveal_config_values_for_api,
-    seal_config_values_for_storage, RegistryEntry, RegistryInstallPlan, McpProbeResult,
-    McpServerToolsSnapshot, McpToolsStore, UsageLogStore,
+    analyze_mcp_server, apply_compiled_run_command, build_registry_install_plan,
+    compile_run_command_template_from_config_values, list_mcp_run_transports, mcp_server_for_runtime,
+    probe_mcp_operation, reveal_config_values_for_api, seal_config_values_for_storage,
+    McpProbeResult, McpServerAnalysis, McpServerApi, McpServerToolsSnapshot, McpToolsStore,
+    McpTransportCatalogEntry, OAuthStore, RegistryEntry, RegistryInstallPlan, UsageLogStore,
 };
 use std::sync::Arc;
 use tauri::State;
 
-fn server_for_api(mut server: McpServer) -> AppResult<McpServer> {
+fn server_for_api(mut server: McpServer) -> AppResult<McpServerApi> {
     server.config_values = reveal_config_values_for_api(&server.config_values)?;
-    Ok(server)
+    let analysis = analyze_mcp_server(&server)?;
+    Ok(McpServerApi { server, analysis })
 }
 
 fn server_for_storage(
@@ -29,13 +31,13 @@ fn server_for_storage(
 }
 
 #[tauri::command]
-pub fn mcp_list_servers(db: State<'_, Database>) -> AppResult<Vec<McpServer>> {
+pub fn mcp_list_servers(db: State<'_, Arc<Database>>) -> AppResult<Vec<McpServerApi>> {
     let servers = db.list_mcp_servers()?;
     servers.into_iter().map(server_for_api).collect()
 }
 
 #[tauri::command]
-pub fn mcp_get_server(db: State<'_, Database>, id: i64) -> AppResult<Option<McpServer>> {
+pub fn mcp_get_server(db: State<'_, Arc<Database>>, id: i64) -> AppResult<Option<McpServerApi>> {
     match db.get_mcp_server(id)? {
         Some(server) => Ok(Some(server_for_api(server)?)),
         None => Ok(None),
@@ -52,7 +54,7 @@ pub fn mcp_get_tools(
 
 #[tauri::command]
 pub async fn mcp_ensure_tools(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     server_id: i64,
 ) -> AppResult<Option<McpServerToolsSnapshot>> {
@@ -64,7 +66,7 @@ pub async fn mcp_ensure_tools(
         .get_mcp_server(server_id)?
         .ok_or_else(|| crate::error::AppError::Message("MCP server not found".to_string()))?;
 
-    if !is_mcp_server_configured(&server) {
+    if !can_attempt_mcp_tools(&server) {
         return Ok(None);
     }
 
@@ -84,14 +86,12 @@ pub async fn mcp_ensure_tools(
         crate::error::AppError::Message(format!("failed to start MCP session: {error}"))
     })?;
 
-    Ok(store.get_tools(server_id).filter(|snapshot| {
-        snapshot.error.is_none() && !snapshot.tools.is_empty()
-    }))
+    Ok(store.get_tools(server_id).filter(snapshot_is_usable))
 }
 
 #[tauri::command]
 pub fn mcp_start_server(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     server_id: i64,
 ) -> AppResult<Option<McpServerToolsSnapshot>> {
@@ -116,7 +116,7 @@ pub fn mcp_is_running(store: State<'_, Arc<McpToolsStore>>, server_id: i64) -> A
 
 #[tauri::command]
 pub async fn mcp_refresh_tools(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     server_id: i64,
 ) -> AppResult<Option<McpServerToolsSnapshot>> {
@@ -136,9 +136,18 @@ pub async fn mcp_refresh_tools(
         crate::error::AppError::Message(format!("failed to refresh MCP tools: {error}"))
     })?;
 
-    Ok(store.get_tools(server_id).filter(|snapshot| {
-        snapshot.error.is_none() && !snapshot.tools.is_empty()
-    }))
+    Ok(store.get_tools(server_id).filter(snapshot_is_usable))
+}
+
+fn snapshot_is_usable(snapshot: &McpServerToolsSnapshot) -> bool {
+    if snapshot
+        .error
+        .as_ref()
+        .is_some_and(|message| message.starts_with("MCP_AUTH_REQUIRED:"))
+    {
+        return true;
+    }
+    snapshot.error.is_none() && !snapshot.tools.is_empty()
 }
 
 #[tauri::command]
@@ -147,8 +156,20 @@ pub fn mcp_compile_run_command(config_values: String) -> AppResult<String> {
 }
 
 #[tauri::command]
+pub fn mcp_analyze_server(mut server: McpServer) -> AppResult<McpServerAnalysis> {
+    server.config_values = reveal_config_values_for_api(&server.config_values)?;
+    analyze_mcp_server(&server)
+}
+
+#[tauri::command]
+pub fn mcp_list_run_transports() -> Vec<McpTransportCatalogEntry> {
+    list_mcp_run_transports()
+}
+
+#[tauri::command]
 pub async fn mcp_probe_operation(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
+    oauth: State<'_, Arc<OAuthStore>>,
     usage_log: State<'_, Arc<UsageLogStore>>,
     server_id: i64,
     operation: String,
@@ -160,10 +181,11 @@ pub async fn mcp_probe_operation(
     let mcp_name = server.name.clone();
     let tool_name = probe_tool_label(&operation);
     let usage_log = Arc::clone(usage_log.inner());
+    let oauth = Arc::clone(oauth.inner());
 
     let probe = tauri::async_runtime::spawn_blocking(move || -> AppResult<McpProbeResult> {
         let runtime_server = mcp_server_for_runtime(&server)?;
-        Ok(probe_mcp_operation(&runtime_server, &operation))
+        Ok(probe_mcp_operation(&runtime_server, &operation, Some(oauth), None))
     })
     .await
     .map_err(|error| {
@@ -192,7 +214,7 @@ fn probe_tool_label(operation: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn mcp_add_server(db: State<'_, Database>, server: McpServer) -> AppResult<McpServer> {
+pub async fn mcp_add_server(db: State<'_, Arc<Database>>, server: McpServer) -> AppResult<McpServerApi> {
     let prepared = server_for_storage(server, None)?;
     let inserted = db.insert_mcp_server(&prepared)?;
     server_for_api(inserted)
@@ -200,22 +222,20 @@ pub async fn mcp_add_server(db: State<'_, Database>, server: McpServer) -> AppRe
 
 #[tauri::command]
 pub fn mcp_update_server(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     server: McpServer,
-) -> AppResult<McpServer> {
+) -> AppResult<McpServerApi> {
     let existing = db.get_mcp_server(server.id)?;
     let prepared = server_for_storage(server, existing.as_ref())?;
     let updated = db.update_mcp_server(&prepared)?;
-    if updated.server_type == McpServerType::Local {
-        store.unregister_server(updated.id);
-    }
+    store.unregister_server(updated.id);
     server_for_api(updated)
 }
 
 #[tauri::command]
 pub fn mcp_remove_server(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     server_id: i64,
 ) -> AppResult<bool> {
@@ -228,9 +248,9 @@ pub fn mcp_remove_server(
 
 #[tauri::command]
 pub async fn mcp_add_from_registry(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     entry: RegistryEntry,
-) -> AppResult<McpServer> {
+) -> AppResult<McpServerApi> {
     match build_registry_install_plan(entry)? {
         RegistryInstallPlan::Local(request) => mcp_install_local(db, request).await,
         RegistryInstallPlan::Remote(server) => mcp_add_server(db, server).await,
@@ -239,9 +259,9 @@ pub async fn mcp_add_from_registry(
 
 #[tauri::command]
 pub async fn mcp_install_local(
-    db: State<'_, Database>,
+    db: State<'_, Arc<Database>>,
     request: InstallMcpLocalRequest,
-) -> AppResult<McpServer> {
+) -> AppResult<McpServerApi> {
     if request.server.server_type != McpServerType::Local {
         return Err(crate::error::AppError::Message(
             "only local servers can be installed".to_string(),

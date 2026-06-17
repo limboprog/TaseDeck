@@ -5,7 +5,27 @@ export function normalizeSearch(search: string): string {
 }
 
 export function entryKey(entry: McpServerEntry): string {
-  return `${entry.server.name}:${entry.server.version}`;
+  return formatRegistryEntryKey(entry.server.name, entry.server.version);
+}
+
+export function formatRegistryEntryKey(name: string, version: string): string {
+  return `${name}:${version}`;
+}
+
+export function parseRegistryEntryKey(
+  key: string,
+): { name: string; version: string } | null {
+  const trimmed = key.trim();
+  const colon = trimmed.lastIndexOf(":");
+  if (colon <= 0 || colon >= trimmed.length - 1) {
+    return null;
+  }
+  const name = trimmed.slice(0, colon).trim();
+  const version = trimmed.slice(colon + 1).trim();
+  if (!name || !version) {
+    return null;
+  }
+  return { name, version };
 }
 
 export type MatchRank = {
@@ -120,6 +140,38 @@ export function filterAndSortEntries(
   return entries
     .filter((entry) => matchesSearch(entry, search))
     .sort((a, b) => compareSearchRelevance(a, b, search));
+}
+
+export function findRegistryEntryByName(
+  entries: McpServerEntry[],
+  serverName: string,
+): McpServerEntry | null {
+  const query = serverName.trim().toLowerCase();
+  if (!query) {
+    return null;
+  }
+
+  const exact = entries.find((entry) => {
+    const name = entry.server.name.trim().toLowerCase();
+    const title = entry.server.title?.trim().toLowerCase();
+    return name === query || title === query;
+  });
+  if (exact) {
+    return exact;
+  }
+
+  const byShortName = entries.find((entry) => {
+    const name = entry.server.name.trim().toLowerCase();
+    const slashIndex = name.lastIndexOf("/");
+    const shortName = slashIndex >= 0 ? name.slice(slashIndex + 1) : name;
+    return shortName === query;
+  });
+  if (byShortName) {
+    return byShortName;
+  }
+
+  const ranked = filterAndSortEntries(entries, serverName);
+  return ranked[0] ?? null;
 }
 
 export function mergeUniqueEntries(

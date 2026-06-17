@@ -30,6 +30,7 @@ export type McpPageSession = {
   search: string;
   expandedServerIds: number[];
   scrollTop: number;
+  pendingManualDraft?: boolean;
 };
 
 export type AgentsPageSession = {
@@ -46,4 +47,28 @@ export const defaultMcpPageSession = (): McpPageSession => ({
 export const defaultAgentsPageSession = (): AgentsPageSession => ({
   search: "",
   scrollTop: 0,
+});
+
+export type WorkspacePageSession = {
+  selectedTopologyId: string | null;
+};
+
+export const defaultWorkspacePageSession = (): WorkspacePageSession => ({
+  selectedTopologyId: null,
+});
+
+export const MARKET_PAGE_SESSION_KEY = "mcp-market";
+
+export type MarketPageSession = {
+  pendingDetailRegistryKey: string | null;
+  /** Resolve legacy installs via installed server record. */
+  pendingDetailServerId: number | null;
+  /** Last-resort name search when no registry key or server id. */
+  pendingDetailServerName: string | null;
+};
+
+export const defaultMarketPageSession = (): MarketPageSession => ({
+  pendingDetailRegistryKey: null,
+  pendingDetailServerId: null,
+  pendingDetailServerName: null,
 });

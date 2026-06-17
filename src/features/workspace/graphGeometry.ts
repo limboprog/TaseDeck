@@ -5,7 +5,8 @@ import {
   getBlockOutlet,
   getBlockRect,
 } from "./blockLayout";
-import { NODE_HEADER_HEIGHT, NODE_WIDTH, getNodeHeight } from "./GraphNode";
+import { GRAPH_SERVER_ROW_HEIGHT, NODE_WIDTH } from "./graphLayoutConstants";
+import { getNodeHeight } from "./GraphNode";
 
 export type Point = { x: number; y: number };
 export type NodeSide = "top" | "bottom" | "left" | "right";
@@ -35,7 +36,7 @@ export function getNodeRect(node: TopologyNode) {
     x: node.x,
     y: node.y,
     width: NODE_WIDTH,
-    height: NODE_HEADER_HEIGHT,
+    height: GRAPH_SERVER_ROW_HEIGHT,
   };
 }
 

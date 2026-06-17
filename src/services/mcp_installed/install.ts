@@ -1,4 +1,5 @@
 import type { McpServerEntry } from "../mcp_registry";
+import { entryKey } from "../mcp_registry/searchCore";
 import {
   getRequiredConfigInputs,
   parseServerSetup,
@@ -7,7 +8,7 @@ import {
 import { addRegistryMcpServer, installLocalMcpServer } from "./api";
 import { buildRegistryRunCommandsState } from "./installRunCommands";
 import { resolveInstallConfigInputs } from "./installPayloadHelpers";
-import { RUN_COMMANDS_CONFIG_KEY } from "./runCommands";
+import { REGISTRY_KEY_CONFIG_KEY, RUN_COMMANDS_CONFIG_KEY } from "./runCommands";
 import type { InstallMcpLocalRequest, InstalledMcpServer } from "./types";
 import { notifyMcpInstalled } from "./types";
 
@@ -55,6 +56,7 @@ export function buildInstallRequest(
       configValues: JSON.stringify({
         ...values,
         [RUN_COMMANDS_CONFIG_KEY]: JSON.stringify(runCommands),
+        [REGISTRY_KEY_CONFIG_KEY]: entryKey(entry),
       }),
       description:
         server.description?.trim() ||

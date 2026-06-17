@@ -939,7 +939,8 @@ var shared = {
   accent: "#8B5CF6",
   error: "#EF4444",
   errorSoft: "#f87171",
-  warning: "#F59E0B",
+  warning: "#FACC15",
+  warningSoft: "#FDE047",
   success: "#4ADE80",
   star: "#FBBF24"
 };
@@ -955,7 +956,8 @@ var colors2 = {
   accent: shared.accent,
   error: shared.error,
   errorSoft: shared.errorSoft,
-  warning: shared.warning,
+  warning: cssVar("--td-warning"),
+  warningSoft: cssVar("--td-warning-soft"),
   success: shared.success,
   glassFillTop: cssVar("--td-glass-fill-top"),
   glassFillBottom: cssVar("--td-glass-fill-bottom"),

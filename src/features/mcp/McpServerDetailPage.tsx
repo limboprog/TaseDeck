@@ -107,14 +107,6 @@ function LinkChip({
   );
 }
 
-function SectionTitle({ children }: { children: string }) {
-  return (
-    <Text color={colors.foreground} fontSize={15} fontWeight="600">
-      {children}
-    </Text>
-  );
-}
-
 function SubsectionTitle({ children }: { children: string }) {
   return (
     <Text color={colors.muted} fontSize={13} fontWeight="600">
@@ -388,10 +380,10 @@ export function McpServerDetailPage({ entry, onBack }: McpServerDetailPageProps)
       ) : null}
 
       <div
+        className="td-scroll-y"
         style={{
           flex: 1,
           minHeight: 0,
-          overflow: "auto",
           width: "100%",
         }}
       >
@@ -445,10 +437,9 @@ export function McpServerDetailPage({ entry, onBack }: McpServerDetailPageProps)
             </ConnectionSection>
           ) : null}
 
-          <YStack gap={8} width="100%">
-            <SectionTitle>Configuration JSON</SectionTitle>
-            <CommandBlock command={setup.rawJson} />
-          </YStack>
+          <ConnectionSection label="Configuration JSON">
+            <CommandBlock command={setup.rawJson} label="json" />
+          </ConnectionSection>
         </YStack>
       </div>
     </YStack>

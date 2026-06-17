@@ -13,6 +13,9 @@ const KEYRING_SERVICE: &str = "TaseDeck";
 const KEYRING_USER: &str = "master_encryption_key";
 const ENCRYPTED_PREFIX: &str = "enc$";
 const ENV_VARIABLES_KEY: &str = "__envVariables";
+pub const OAUTH_REFRESH_TOKEN_KEY: &str = "__oauthRefreshToken";
+pub const OAUTH_API_KEY_KEY: &str = "__oauthApiKey";
+pub const OAUTH_CLIENT_ID_KEY: &str = "__oauthClientId";
 
 static MASTER_KEY: OnceCell<[u8; 32]> = OnceCell::new();
 
@@ -27,15 +30,17 @@ pub fn mask_secret(value: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    if trimmed.len() <= 6 {
-        let head = &trimmed[..trimmed.len().min(3)];
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 6 {
+        let head: String = chars.iter().take(3).collect();
         return format!("{head}...");
     }
-    format!(
-        "{}...{}",
-        &trimmed[..3],
-        &trimmed[trimmed.len().saturating_sub(3)..]
-    )
+    let head: String = chars.iter().take(3).collect();
+    let tail: String = chars
+        .iter()
+        .skip(chars.len().saturating_sub(3))
+        .collect();
+    format!("{head}...{tail}")
 }
 
 pub fn looks_masked(value: &str) -> bool {
@@ -270,6 +275,9 @@ fn parse_values_object(raw: &str) -> AppResult<Map<String, Value>> {
 }
 
 fn is_secret_key(key: &str, map: &Map<String, Value>) -> bool {
+    if key == OAUTH_REFRESH_TOKEN_KEY || key == OAUTH_API_KEY_KEY || key == OAUTH_CLIENT_ID_KEY {
+        return true;
+    }
     if key.starts_with("__") && key != ENV_VARIABLES_KEY {
         return false;
     }
@@ -285,6 +293,15 @@ fn is_secret_key(key: &str, map: &Map<String, Value>) -> bool {
 
 fn collect_secret_keys(map: &Map<String, Value>, env_names: &HashSet<String>) -> Vec<String> {
     let mut keys = HashSet::new();
+    if map.contains_key(OAUTH_REFRESH_TOKEN_KEY) {
+        keys.insert(OAUTH_REFRESH_TOKEN_KEY.to_string());
+    }
+    if map.contains_key(OAUTH_API_KEY_KEY) {
+        keys.insert(OAUTH_API_KEY_KEY.to_string());
+    }
+    if map.contains_key(OAUTH_CLIENT_ID_KEY) {
+        keys.insert(OAUTH_CLIENT_ID_KEY.to_string());
+    }
     if map.contains_key(ENV_VARIABLES_KEY) {
         keys.insert(ENV_VARIABLES_KEY.to_string());
     }
@@ -415,4 +432,17 @@ fn decrypt_secret_value(value: &str) -> AppResult<String> {
         return decrypt_string(trimmed);
     }
     Ok(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_secret;
+
+    #[test]
+    fn mask_secret_handles_utf8_characters() {
+        assert_eq!(mask_secret("Акай34а34а4а43"), "Ака...а43");
+        assert_eq!(mask_secret("abc"), "abc...");
+        assert_eq!(mask_secret("abcdef"), "abc...");
+        assert_eq!(mask_secret("abcdefg"), "abc...efg");
+    }
 }

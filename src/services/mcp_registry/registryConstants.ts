@@ -1,0 +1,4 @@
+export const MARKET_PAGE_SIZE = 45;
+export const MARKET_PREFETCH_AHEAD_PAGES = 2;
+export const MARKET_PREFETCH_BEHIND_PAGES = 1;
+export const MARKET_FETCH_BATCH_MAX = 100;

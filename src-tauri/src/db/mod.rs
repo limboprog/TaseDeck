@@ -3,10 +3,11 @@ mod graphs;
 pub mod mcp_config;
 mod models;
 mod topology_run;
+mod usage_log;
 
 pub use models::{
     AgentRecord, GraphLinkInput, GraphRecord, GraphServerLink, GraphState, InstallMcpLocalRequest,
-    McpServer, McpServerType,
+    McpServer, McpServerType, UsageLogEntry,
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -27,6 +28,7 @@ impl Database {
 
         let conn = Connection::open(path)?;
         conn.execute_batch(include_str!("init.sql"))?;
+        usage_log::ensure_usage_log_table(&conn)?;
         migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -134,6 +136,16 @@ impl Database {
         let conn = self.conn.lock().expect("database mutex poisoned");
         let affected = conn.execute("DELETE FROM mcp_servers WHERE id = ?1", params![id])?;
         Ok(affected > 0)
+    }
+
+    pub fn load_usage_log(&self) -> rusqlite::Result<(std::collections::VecDeque<UsageLogEntry>, u64)> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        usage_log::load_usage_log_entries(&conn)
+    }
+
+    pub fn insert_usage_log_entry(&self, entry: &UsageLogEntry) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        usage_log::insert_usage_log_entry(&conn, entry)
     }
 }
 

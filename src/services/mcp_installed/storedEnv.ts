@@ -1,6 +1,7 @@
 import type { ConfigInput } from "../mcp_registry/parser";
 import type { EnvVariableRow } from "./envEditor";
 import { createEmptyEnvRow } from "./envEditor";
+import { canonicalEnvId, normalizeEnvVariableName } from "./variableNames";
 
 export const ENV_VARIABLES_CONFIG_KEY = "__envVariables";
 
@@ -23,13 +24,17 @@ export function parseStoredEnvRows(values: Record<string, string>): EnvVariableR
       if (Array.isArray(parsed)) {
         return parsed
           .filter((entry) => entry && typeof entry.name === "string")
-          .map((entry) => ({
-            id: entry.id || createStoredId(),
-            name: entry.name,
-            value: entry.value ?? "",
-            label: entry.label,
-            isEditing: false,
-          }));
+          .map((entry) => {
+            const name = normalizeEnvVariableName(entry.name);
+            return {
+              id: name ? canonicalEnvId(name) : entry.id || createStoredId(),
+              name,
+              value: entry.value ?? "",
+              label: entry.label,
+              isEditing: false,
+            };
+          })
+          .filter((entry) => entry.name);
       }
     } catch {
       /* fall through */
@@ -43,13 +48,16 @@ export function parseStoredEnvRows(values: Record<string, string>): EnvVariableR
     if (key.startsWith("__")) {
       continue;
     }
-    const name = key.startsWith("env:") ? key.slice(4) : key;
-    if (!name.trim() || seen.has(name)) {
+    if (key.startsWith("header:")) {
+      continue;
+    }
+    const name = normalizeEnvVariableName(key.startsWith("env:") ? key.slice(4) : key);
+    if (!name || seen.has(name)) {
       continue;
     }
     seen.add(name);
     rows.push({
-      id: `env:${name}`,
+      id: canonicalEnvId(name),
       name,
       value,
       isEditing: false,
@@ -62,12 +70,15 @@ export function parseStoredEnvRows(values: Record<string, string>): EnvVariableR
 export function serializeStoredEnvRows(rows: EnvVariableRow[]): string {
   const payload: StoredEnvVariable[] = rows
     .filter((row) => row.name.trim())
-    .map((row) => ({
-      id: row.id,
-      name: row.name.trim(),
-      value: row.value,
-      label: row.label?.trim() || undefined,
-    }));
+    .map((row) => {
+      const name = normalizeEnvVariableName(row.name);
+      return {
+        id: canonicalEnvId(name),
+        name,
+        value: row.value,
+        label: row.label?.trim() || undefined,
+      };
+    });
   return JSON.stringify(payload);
 }
 
@@ -90,7 +101,8 @@ export function envValuesFromRows(
     if (!name) {
       continue;
     }
-    next[`env:${name}`] = row.value;
+    const envId = canonicalEnvId(name);
+    next[envId] = row.value;
     next[name] = row.value;
   }
 
@@ -105,8 +117,8 @@ export function envInputsFromRows(
   const envInputs: ConfigInput[] = rows
     .filter((row) => row.name.trim())
     .map((row) => ({
-      id: row.id.startsWith("env:") ? row.id : `env:${row.name.trim()}`,
-      name: row.name.trim(),
+      id: canonicalEnvId(row.name),
+      name: normalizeEnvVariableName(row.name),
       description: undefined,
       isRequired: false,
       isSecret: /key|token|secret|password|credential/i.test(row.name),

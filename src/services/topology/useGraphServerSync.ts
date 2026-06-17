@@ -8,6 +8,7 @@ const SYNC_DELAY_MS = 600;
 type GraphHydrate = {
   edges?: TopologyEdge[];
   blocks?: TopologyBlock[];
+  nodes?: TopologyNode[];
 };
 
 type UseGraphServerSyncOptions = {
@@ -25,6 +26,16 @@ type UseGraphServerSyncOptions = {
 function blocksActiveStateEqual(a: TopologyBlock[], b: TopologyBlock[]) {
   return JSON.stringify(a.map((block) => block.memberRunning ?? {})) ===
     JSON.stringify(b.map((block) => block.memberRunning ?? {}));
+}
+
+function standaloneMcpActiveEqual(a: TopologyNode[], b: TopologyNode[]) {
+  const pick = (nodes: TopologyNode[]) =>
+    Object.fromEntries(
+      nodes
+        .filter((node) => node.type === "mcp" && !node.blockId)
+        .map((node) => [node.id, node.mcpActive !== false]),
+    );
+  return JSON.stringify(pick(a)) === JSON.stringify(pick(b));
 }
 
 /**
@@ -87,7 +98,11 @@ export function useGraphServerSync({
           patch.blocks = merged.blocks;
         }
 
-        if (patch.edges || patch.blocks) {
+        if (!standaloneMcpActiveEqual(nodesRef.current, merged.nodes)) {
+          patch.nodes = merged.nodes;
+        }
+
+        if (patch.edges || patch.blocks || patch.nodes) {
           onHydrateRef.current?.(patch);
         }
 

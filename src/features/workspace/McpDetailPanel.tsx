@@ -93,7 +93,7 @@ export function McpDetailPanel({ serverId, onClose }: McpDetailPanelProps) {
         </XStack>
       </XStack>
 
-      <YStack flex={1} minH={0} overflow="scroll" px={12} pb={12}>
+      <YStack className="td-scroll-y" flex={1} minH={0} px={12} pb={12}>
         <McpToolsList
           tools={snapshot?.tools ?? []}
           loading={loading}

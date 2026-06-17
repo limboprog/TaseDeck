@@ -1,0 +1,41 @@
+{
+    "servers": [
+      {
+        "name": "snowflake",
+        "description": "Snowflake data warehouse operations",
+        "category": "Databases",
+        "registry": "npm",
+        "identifier": "@snowflake/mcp-server",
+        "transport": "stdio",
+        "stars": 5800,
+        "source": "https://github.com/snowflakedb/mcp-server"
+      },
+      {
+        "name": "bigquery",
+        "description": "Google BigQuery analytics",
+        "category": "Databases",
+        "registry": "npm",
+        "identifier": "@google/mcp-server-bigquery",
+        "transport": "stdio",
+        "stars": 5600,
+        "source": "https://github.com/googleapis/mcp-server-bigquery"
+      },
+      {
+        "name": "redshift",
+        "description": "AWS Redshift data warehouse",
+        "category": "Databases",
+        "registry": "npm",
+        "identifier": "@aws/mcp-server-redshift",
+        "transport": "stdio",
+        "stars": 5400,
+        "source": "https://github.com/aws/mcp-server-redshift"
+      }
+    ],
+    "metadata": {
+      "total": 200,
+      "official_registry_url": "https://modelcontextprotocol.io/registry",
+      "registry_api": "https://registry.modelcontextprotocol.io/v0.1/servers",
+      "note": "MCP Registry currently in preview - may contain 30+ registered servers, expanding to thousands. This list includes official reference servers, community servers, and aggregated entries from directories like mcpserverslist, Smithery, and Composio. Star counts are aggregated estimates across platforms.",
+      "cursor_setup": "Add MCP config to ~/.cursor/mcp.json with format: {\"mcpServers\": {\"server-name\": {\"command\": \"npx\", \"args\": [\"-y\", \"@package/server\"], \"env\": {}}}}"
+    }
+  }

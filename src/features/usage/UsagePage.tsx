@@ -221,10 +221,10 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
       <McpPanel flex={1} minH={0} p={0} overflow="hidden" display="flex" flexDirection="column">
         <div
           ref={scrollRef}
+          className="td-scroll-y"
           style={{
             flex: 1,
             minHeight: 0,
-            overflow: "auto",
             padding: 16,
             boxSizing: "border-box",
           }}

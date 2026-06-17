@@ -19,7 +19,11 @@ import { InstalledMcpCard } from "./InstalledMcpCard";
 
 const MCP_PAGE_SESSION_KEY = "mcp-installed";
 
-export function McpInstalledPage() {
+type McpInstalledPageProps = {
+  mcpActive?: boolean;
+};
+
+export function McpInstalledPage({ mcpActive = true }: McpInstalledPageProps) {
   const { servers, loading, error, refresh } = useInstalledMcpServers();
   const [session, setSession] = useState<McpPageSession>(() =>
     readPageSession(MCP_PAGE_SESSION_KEY, defaultMcpPageSession()),
@@ -35,6 +39,22 @@ export function McpInstalledPage() {
   useEffect(() => {
     initRegistryWorker();
   }, []);
+
+  useEffect(() => {
+    if (!mcpActive) {
+      return;
+    }
+    const stored = readPageSession(MCP_PAGE_SESSION_KEY, defaultMcpPageSession());
+    if (!stored.pendingManualDraft) {
+      return;
+    }
+    setManualDraft(createManualMcpDraft());
+    setSession((current) => {
+      const next = { ...current, pendingManualDraft: false };
+      writePageSession(MCP_PAGE_SESSION_KEY, next);
+      return next;
+    });
+  }, [mcpActive]);
 
   const setSearch = useCallback((value: string) => {
     setSession((current) => ({ ...current, search: value }));

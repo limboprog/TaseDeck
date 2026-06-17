@@ -1,20 +1,14 @@
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+  MCP_LIST_SCROLL_CLIP_Z_INDEX,
+  MCP_LIST_STICKY_TOP,
+} from "../../features/mcp/mcpScrollLayout";
+import { layoutClasses, mergeLayoutClass } from "../../styles/layout";
 import { colors } from "../../theme";
 
 type ScrollFadePanelProps = {
   header?: ReactNode;
   children: ReactNode;
-  /** Height of the fade strip between header and list (px). */
-  fadeHeight?: number;
-  /** Scroll distance (px) until fade reaches full strength. */
-  fadeDistance?: number;
   contentPadding?: string;
   /** Restore and persist vertical scroll for the session. */
   initialScrollTop?: number;
@@ -24,14 +18,11 @@ type ScrollFadePanelProps = {
 export function ScrollFadePanel({
   header,
   children,
-  fadeHeight = 48,
-  fadeDistance = 56,
   contentPadding = "16px",
   initialScrollTop = 0,
   onScrollTopChange,
 }: ScrollFadePanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [fadeOpacity, setFadeOpacity] = useState(0);
   const restoredScrollRef = useRef(false);
 
   useEffect(() => {
@@ -41,9 +32,7 @@ export function ScrollFadePanel({
     }
     node.scrollTop = initialScrollTop;
     restoredScrollRef.current = true;
-    const next = Math.min(1, node.scrollTop / fadeDistance);
-    setFadeOpacity(next);
-  }, [fadeDistance, initialScrollTop]);
+  }, [initialScrollTop]);
 
   const handleScroll = useCallback(() => {
     const node = scrollRef.current;
@@ -51,24 +40,10 @@ export function ScrollFadePanel({
       return;
     }
     onScrollTopChange?.(node.scrollTop);
-    const next = Math.min(1, node.scrollTop / fadeDistance);
-    setFadeOpacity((current) => (Math.abs(current - next) < 0.02 ? current : next));
-  }, [fadeDistance, onScrollTopChange]);
-
-  const fadeStyle: CSSProperties = {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: fadeHeight,
-    pointerEvents: "none",
-    zIndex: 2,
-    opacity: fadeOpacity,
-    background: `linear-gradient(to bottom, ${colors.surface} 0%, transparent 100%)`,
-  };
+  }, [onScrollTopChange]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+    <div className={mergeLayoutClass(layoutClasses.stack, layoutClasses.clip)} style={{ flex: 1 }}>
       {header != null ? (
         <div
           style={{
@@ -85,27 +60,38 @@ export function ScrollFadePanel({
         </div>
       ) : null}
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        <div style={fadeStyle} aria-hidden />
+      <div className={layoutClasses.clip} style={{ position: "relative", flex: 1 }}>
         <div
           ref={scrollRef}
+          className={layoutClasses.scrollY}
           onScroll={handleScroll}
           style={{
             height: "100%",
-            minHeight: 0,
-            overflow: "auto",
             width: "100%",
+            overflowAnchor: "none",
           }}
         >
           <div
             style={{
               padding: contentPadding,
-              paddingTop: 4,
+              paddingTop: MCP_LIST_STICKY_TOP,
               display: "flex",
               flexDirection: "column",
               gap: 12,
             }}
           >
+            <div
+              aria-hidden
+              style={{
+                position: "sticky",
+                top: MCP_LIST_STICKY_TOP,
+                zIndex: MCP_LIST_SCROLL_CLIP_Z_INDEX,
+                height: 0,
+                margin: 0,
+                pointerEvents: "none",
+                boxShadow: `0 -100vh 0 100vh ${colors.surface}`,
+              }}
+            />
             {children}
           </div>
         </div>

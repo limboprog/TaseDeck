@@ -2,6 +2,10 @@ import type { TopologyBlock, TopologyEdge, TopologyNode } from "../../services/t
 
 export type EndpointRole = "mcp" | "agent";
 
+export function isMcpNodeActive(node: TopologyNode) {
+  return node.mcpActive !== false;
+}
+
 export function isNodeGraphReady(
   node: TopologyNode,
   placeableAgentIds: ReadonlySet<number>,
@@ -202,6 +206,36 @@ export function snapshotMemberRunning(
     snapshot[memberId] = block.memberRunning?.[memberId] !== false;
   }
   return snapshot;
+}
+
+export function applyStandaloneMcpEdgeEnabled(
+  nodes: TopologyNode[],
+  mcpNodeId: string,
+  enabled: boolean,
+): TopologyNode[] {
+  return nodes.map((node) => {
+    if (node.id !== mcpNodeId || node.type !== "mcp" || node.blockId) {
+      return node;
+    }
+
+    if (!enabled) {
+      return {
+        ...node,
+        mcpActiveSnapshot: isMcpNodeActive(node),
+        mcpActive: false,
+      };
+    }
+
+    if (node.mcpActiveSnapshot === undefined) {
+      return node;
+    }
+
+    return {
+      ...node,
+      mcpActive: node.mcpActiveSnapshot !== false,
+      mcpActiveSnapshot: undefined,
+    };
+  });
 }
 
 export function applyBlockEdgeEnabled(

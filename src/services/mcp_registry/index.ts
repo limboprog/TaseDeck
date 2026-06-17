@@ -1,4 +1,10 @@
 export { fetchRegistryServers } from "./api";
+export {
+  MARKET_FETCH_BATCH_MAX,
+  MARKET_PAGE_SIZE,
+  MARKET_PREFETCH_AHEAD_PAGES,
+  MARKET_PREFETCH_BEHIND_PAGES,
+} from "./registryConstants";
 export { registrySearchCache, RegistrySearchCache } from "./cache";
 export type { SearchSession } from "./cache";
 export { filterByConnection } from "./filters";

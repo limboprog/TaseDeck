@@ -6,7 +6,11 @@ import {
   type McpServerToolsSnapshot,
 } from "./toolsApi";
 
-export function useMcpToolsSession(serverId: number, active: boolean) {
+export function useMcpToolsSession(
+  serverId: number,
+  active: boolean,
+  sessionKey = "",
+) {
   const [snapshot, setSnapshot] = useState<McpServerToolsSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [toolEnabled, setToolEnabled] = useState<Record<string, boolean>>(() =>
@@ -38,11 +42,12 @@ export function useMcpToolsSession(serverId: number, active: boolean) {
     if (!active) {
       requestIdRef.current += 1;
       setLoading(false);
+      setSnapshot(null);
       return;
     }
     setToolEnabled(loadMcpToolEnabledMap(serverId));
     void connect();
-  }, [active, connect, serverId]);
+  }, [active, connect, serverId, sessionKey]);
 
   const toggleTool = useCallback(
     (toolName: string, enabled: boolean) => {

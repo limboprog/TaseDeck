@@ -7,9 +7,12 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { InlineLoader } from "../../components/InlineLoader";
-import { IoAdd } from "../../icons";
-import { Button, Text, XStack, YStack } from "tamagui";
+import { Text, XStack, YStack } from "tamagui";
 import { useInstalledMcpServers } from "../../services/mcp_installed";
+import {
+  MCP_INSTALLED_EVENT,
+  MCP_REMOVED_EVENT,
+} from "../../services/mcp_installed/types";
 import {
   AGENTS_CHANGED_EVENT,
   listAgentRecords,
@@ -25,8 +28,8 @@ import {
   type TopologyNodeType,
 } from "../../services/topology";
 import { useGraphServerSync } from "../../services/topology/useGraphServerSync";
-import { blocks as themeBlocks, colors, graph, tamaguiSurfaces } from "../../theme";
-import { AddNodeSidePanel } from "./AddNodeSidePanel";
+import { blocks as themeBlocks, colors, graph } from "../../theme";
+import { TopologyAddControl } from "./TopologyAddControl";
 import {
   collectMcpsFromSelectionRect,
   getBlockRect,
@@ -41,7 +44,9 @@ import { GraphBlock } from "./GraphBlock";
 import { getNodeHeight, GraphNode } from "./GraphNode";
 import {
   applyBlockEdgeEnabled,
+  applyStandaloneMcpEdgeEnabled,
   isBlockConfigured,
+  isMcpNodeActive,
   isNodeGraphReady,
   isValidConnection,
   normalizeEdgeEndpoints,
@@ -128,7 +133,6 @@ export function TopologyGraph({
   const panRef = useRef<Point>({ x: 0, y: 0 });
   const zoomRef = useRef(1);
 
-  const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [pickModalType, setPickModalType] = useState<TopologyNodeType | null>(null);
   const [groupToolActive, setGroupToolActive] = useState(false);
   const [marquee, setMarquee] = useState<{ start: Point; end: Point } | null>(null);
@@ -187,6 +191,16 @@ export function TopologyGraph({
     const onAgentsChanged = () => refreshPlaceableNodes();
     window.addEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
     return () => window.removeEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
+  }, [refreshPlaceableNodes]);
+
+  useEffect(() => {
+    const onMcpChanged = () => refreshPlaceableNodes();
+    window.addEventListener(MCP_INSTALLED_EVENT, onMcpChanged);
+    window.addEventListener(MCP_REMOVED_EVENT, onMcpChanged);
+    return () => {
+      window.removeEventListener(MCP_INSTALLED_EVENT, onMcpChanged);
+      window.removeEventListener(MCP_REMOVED_EVENT, onMcpChanged);
+    };
   }, [refreshPlaceableNodes]);
 
   useEffect(() => {
@@ -398,7 +412,6 @@ export function TopologyGraph({
   }, [zoomAtScreenPoint]);
 
   const handlePickNodeType = (type: TopologyNodeType) => {
-    setAddPanelOpen(false);
     setPickModalType(type);
   };
 
@@ -1063,12 +1076,16 @@ export function TopologyGraph({
         current.filter((edge) => !removedBlockIds.includes(edge.sourceId)),
       );
     }
+    const memberWasActive = block.memberRunning?.[memberId] !== false;
+
     updateNodes(
       topology.nodes.map((entry) =>
         entry.id === memberId
           ? {
               ...entry,
               blockId: undefined,
+              mcpActive: memberWasActive,
+              mcpActiveSnapshot: undefined,
               x: block.x + getBlockWidth() + 28,
               y: rowY,
               expanded: false,
@@ -1087,6 +1104,11 @@ export function TopologyGraph({
     const nextEnabled = edge.enabled === false;
     if (blocksById.has(edge.sourceId)) {
       updateBlocks(applyBlockEdgeEnabled(blocks, edge.sourceId, nextEnabled));
+    } else {
+      const source = nodeById.get(edge.sourceId);
+      if (source?.type === "mcp" && !source.blockId) {
+        updateNodes(applyStandaloneMcpEdgeEnabled(topology.nodes, source.id, nextEnabled));
+      }
     }
 
     updateEdges((current) =>
@@ -1230,16 +1252,17 @@ export function TopologyGraph({
     <YStack flex={1} minH={0} minW={0} overflow="hidden" bg={colors.page} position="relative">
       <XStack
         gap={8}
-        items="center"
+        items="flex-start"
         style={{
           position: "absolute",
           top: 12,
           left: 12,
           zIndex: 20,
           pointerEvents: "none",
+          alignItems: "flex-start",
         }}
       >
-        <div style={{ pointerEvents: "auto" }}>
+        <div style={{ pointerEvents: "auto", flexShrink: 0, alignSelf: "flex-start" }}>
           <WorkspaceToolbar
             groupToolActive={groupToolActive}
             onToggleGroupTool={() => {
@@ -1250,21 +1273,9 @@ export function TopologyGraph({
           />
         </div>
 
-        <Button
-          unstyled
-          width={32}
-          height={32}
-          rounded={8}
-          bg={addPanelOpen ? tamaguiSurfaces.activeBg : tamaguiSurfaces.controlHoverBg}
-          hoverStyle={{ bg: tamaguiSurfaces.controlHoverStrongBg }}
-          onPress={() => setAddPanelOpen((open) => !open)}
-          aria-label="Add node"
-          style={{ pointerEvents: "auto" }}
-        >
-          <XStack flex={1} items="center" justify="center" style={{ color: colors.foreground }}>
-            <IoAdd size={20} />
-          </XStack>
-        </Button>
+        <div style={{ pointerEvents: "auto", flexShrink: 0, alignSelf: "flex-start" }}>
+          <TopologyAddControl onPickType={handlePickNodeType} />
+        </div>
       </XStack>
 
       <div
@@ -1275,8 +1286,6 @@ export function TopologyGraph({
           overflow: "hidden",
         }}
       >
-          <AddNodeSidePanel open={addPanelOpen} onPickType={handlePickNodeType} />
-
           {pickModalType ? (
             <PickNodeModal
               type={pickModalType}
@@ -1452,6 +1461,7 @@ export function TopologyGraph({
                       draggingBlockId !== null
                     }
                     onToggleExpand={() => handleToggleExpand(node.id)}
+                    running={node.type !== "mcp" || isMcpNodeActive(node)}
                     onOpenSettings={
                       node.type === "mcp" && node.mcpServerId !== undefined
                         ? () => handleOpenMcpPanel(node.mcpServerId!)
