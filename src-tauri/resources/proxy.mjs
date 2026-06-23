@@ -634,7 +634,8 @@ async function connectStdioDownstream() {
 
   downstream = spawn(command, args, {
     env,
-    stdio: ["pipe", "pipe", "inherit"],
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
 
   downstreamPending.clear();

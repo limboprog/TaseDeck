@@ -1,8 +1,12 @@
+#[cfg(target_os = "windows")]
+use crate::core::process::hide_console_window;
 use std::process::{Command, Stdio};
 
 #[cfg(target_os = "windows")]
 pub fn run_shell(command: &str) -> std::io::Result<std::process::Output> {
-    Command::new("cmd")
+    let mut child = Command::new("cmd");
+    hide_console_window(&mut child);
+    child
         .args(["/C", command])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
