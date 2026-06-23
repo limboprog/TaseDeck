@@ -1,8 +1,0 @@
-/Users/leonidborodin/Documents/programming/antigravity/TaseDeck/src-tauri/../target/debug/deps/serde_with_macros-7c4c2beb67442440.d: /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/lib.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/apply.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/lazy_bool.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/utils.rs
-
-/Users/leonidborodin/Documents/programming/antigravity/TaseDeck/src-tauri/../target/debug/deps/libserde_with_macros-7c4c2beb67442440.dylib: /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/lib.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/apply.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/lazy_bool.rs /Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/utils.rs
-
-/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/lib.rs:
-/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/apply.rs:
-/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/lazy_bool.rs:
-/Users/leonidborodin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.20.0/src/utils.rs:
