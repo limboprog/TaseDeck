@@ -4,7 +4,7 @@ export const COLOR_SCHEME_STORAGE_KEY = "tasedeck.colorScheme";
 
 export function readColorSchemePreference(): ColorScheme {
   if (typeof window === "undefined") {
-    return "light";
+    return "dark";
   }
 
   const stored = window.localStorage.getItem(COLOR_SCHEME_STORAGE_KEY);
@@ -12,7 +12,7 @@ export function readColorSchemePreference(): ColorScheme {
     return stored;
   }
 
-  return "light";
+  return "dark";
 }
 
 export function writeColorSchemePreference(scheme: ColorScheme): void {

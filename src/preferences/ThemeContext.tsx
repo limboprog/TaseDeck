@@ -49,9 +49,9 @@ export function useThemeMode(): ThemeContextValue {
   const context = useContext(ThemeContext);
   if (!context) {
     return {
-      colorScheme: "light",
+      colorScheme: "dark",
       setColorScheme: () => {},
-      isLight: true,
+      isLight: false,
     };
   }
   return context;

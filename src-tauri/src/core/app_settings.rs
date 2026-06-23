@@ -6,8 +6,6 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 const SETTINGS_FILE: &str = "app_config.json";
-const KEYRING_SERVICE: &str = "TaseDeck";
-const KEYRING_USER: &str = "master_encryption_key";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -96,18 +94,6 @@ fn save_app_settings(settings: &AppSettings) -> AppResult<()> {
         .map_err(|error| AppError::Message(format!("failed to write app settings: {error}")))
 }
 
-/// Existing installs may already have a key in the OS keyring — keep that mode until the user opts out.
 fn detect_initial_settings() -> AppSettings {
-    let keyring_has_key = keyring_has_master_key();
-    let file_has_key = crate::core::fs::master_key_file_path().is_file();
-
-    let use_os_keyring = keyring_has_key && !file_has_key;
-    AppSettings { use_os_keyring }
-}
-
-fn keyring_has_master_key() -> bool {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .ok()
-        .and_then(|entry| entry.get_password().ok())
-        .is_some_and(|value| !value.trim().is_empty())
+    AppSettings::default()
 }
