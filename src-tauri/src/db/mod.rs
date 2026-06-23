@@ -1,13 +1,22 @@
 mod agent_records;
+mod app_meta;
 mod graphs;
 pub mod mcp_config;
 mod models;
+mod presets;
+mod projects;
 mod topology_run;
+mod tool_prefs;
 mod usage_log;
+
+pub use usage_log::truncate_usage_result;
 
 pub use models::{
     AgentRecord, GraphLinkInput, GraphRecord, GraphServerLink, GraphState, InstallMcpLocalRequest,
-    McpServer, McpServerType, UsageLogEntry,
+    LegacyProjectInput, LegacyPresetInput, McpServer, McpServerType, PresetRecord,
+    ProjectAgentAssignmentDetail, ProjectAssignmentDetail, ProjectDetailRecord,
+    ProjectPresetServerDetail, ProjectRecord,
+    UsageLogEntry, WorkspaceBootstrapRequest, WorkspaceBootstrapResult, WorkspaceBootstrapStatus,
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -29,6 +38,7 @@ impl Database {
         let conn = Connection::open(path)?;
         conn.execute_batch(include_str!("init.sql"))?;
         usage_log::ensure_usage_log_table(&conn)?;
+        tool_prefs::ensure_tool_prefs_table(&conn)?;
         migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -40,11 +50,68 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, name, server_type, path, run_command, json_config, config_inputs, config_values, description, created_at, updated_at
              FROM mcp_servers
+             WHERE catalog_visible = 1
              ORDER BY created_at DESC, id DESC",
         )?;
 
         let rows = stmt.query_map([], map_mcp_server_row)?;
         rows.collect()
+    }
+
+    pub fn find_mcp_server_by_name(&self, name: &str) -> rusqlite::Result<Option<McpServer>> {
+        let normalized = name.trim();
+        if normalized.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, name, server_type, path, run_command, json_config, config_inputs, config_values, description, created_at, updated_at
+             FROM mcp_servers
+             WHERE lower(name) = lower(?1)
+             LIMIT 1",
+        )?;
+        stmt.query_row(params![normalized], map_mcp_server_row)
+            .optional()
+    }
+
+    pub fn mcp_server_used_in_presets(&self, id: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM preset_mcp_servers WHERE mcp_server_id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn hide_mcp_server_from_catalog(&self, id: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        let affected = conn.execute(
+            "UPDATE mcp_servers
+             SET catalog_visible = 0, updated_at = datetime('now')
+             WHERE id = ?1 AND catalog_visible = 1",
+            params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn show_mcp_server_in_catalog(&self, id: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        let affected = conn.execute(
+            "UPDATE mcp_servers
+             SET catalog_visible = 1, updated_at = datetime('now')
+             WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn remove_mcp_server_from_catalog(&self, id: i64) -> rusqlite::Result<bool> {
+        if self.mcp_server_used_in_presets(id)? {
+            self.hide_mcp_server_from_catalog(id)
+        } else {
+            self.delete_mcp_server(id)
+        }
     }
 
     pub fn get_mcp_server(&self, id: i64) -> rusqlite::Result<Option<McpServer>> {
@@ -147,6 +214,80 @@ impl Database {
         let conn = self.conn.lock().expect("database mutex poisoned");
         usage_log::insert_usage_log_entry(&conn, entry)
     }
+
+    pub fn usage_log_entry_exists(
+        &self,
+        mcp_name: &str,
+        tool_name: &str,
+        caller: &str,
+        created_at: &str,
+        project_id: Option<i64>,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        usage_log::usage_log_entry_exists(
+            &conn,
+            mcp_name,
+            tool_name,
+            caller,
+            created_at,
+            project_id,
+        )
+    }
+
+    pub fn max_usage_log_id(&self) -> rusqlite::Result<u64> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM usage_log_entries",
+            [],
+            |row| row.get::<_, i64>(0).map(|id| id as u64),
+        )
+    }
+
+    pub fn load_mcp_tool_prefs(
+        &self,
+        server_id: i64,
+    ) -> rusqlite::Result<std::collections::HashMap<String, bool>> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        tool_prefs::load_tool_prefs_map(&conn, server_id)
+    }
+
+    pub fn set_mcp_tool_pref(
+        &self,
+        server_id: i64,
+        tool_name: &str,
+        enabled: bool,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        tool_prefs::set_tool_pref(&conn, server_id, tool_name, enabled)
+    }
+
+    pub fn replace_mcp_tool_prefs(
+        &self,
+        server_id: i64,
+        prefs: &std::collections::HashMap<String, bool>,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        tool_prefs::replace_tool_prefs(&conn, server_id, prefs)
+    }
+
+    pub fn clear_mcp_tool_prefs(&self, server_id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        tool_prefs::clear_tool_prefs(&conn, server_id)
+    }
+
+    pub fn normalize_mcp_tool_prefs(&self, server_id: i64) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        tool_prefs::normalize_tool_prefs(&conn, server_id)
+    }
+
+    pub fn load_mcp_tool_disabled_prefs(
+        &self,
+        server_id: i64,
+    ) -> rusqlite::Result<std::collections::HashMap<String, bool>> {
+        self.normalize_mcp_tool_prefs(server_id)?;
+        let map = self.load_mcp_tool_prefs(server_id)?;
+        Ok(tool_prefs::disabled_tool_prefs(map))
+    }
 }
 
 fn fetch_mcp_server(conn: &Connection, id: i64) -> rusqlite::Result<Option<McpServer>> {
@@ -160,7 +301,14 @@ fn fetch_mcp_server(conn: &Connection, id: i64) -> rusqlite::Result<Option<McpSe
 }
 
 fn map_mcp_server_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<McpServer> {
-    let server_type_raw: String = row.get(2)?;
+    map_mcp_server_row_at(row, 0)
+}
+
+pub(crate) fn map_mcp_server_row_at(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<McpServer> {
+    let server_type_raw: String = row.get(offset + 2)?;
     let server_type = McpServerType::from_str(&server_type_raw).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
             2,
@@ -173,17 +321,17 @@ fn map_mcp_server_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<McpServer> {
     })?;
 
     Ok(McpServer {
-        id: row.get(0)?,
-        name: row.get(1)?,
+        id: row.get(offset + 0)?,
+        name: row.get(offset + 1)?,
         server_type,
-        path: row.get(3)?,
-        run_command: row.get(4)?,
-        json_config: row.get(5)?,
-        config_inputs: row.get(6)?,
-        config_values: row.get(7)?,
-        description: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        path: row.get(offset + 3)?,
+        run_command: row.get(offset + 4)?,
+        json_config: row.get(offset + 5)?,
+        config_inputs: row.get(offset + 6)?,
+        config_values: row.get(offset + 7)?,
+        description: row.get(offset + 8)?,
+        created_at: row.get(offset + 9)?,
+        updated_at: row.get(offset + 10)?,
     })
 }
 
@@ -225,6 +373,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
 
+    let has_catalog_visible: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('mcp_servers') WHERE name = 'catalog_visible'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_catalog_visible == 0 {
+        conn.execute(
+            "ALTER TABLE mcp_servers ADD COLUMN catalog_visible INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+
     let has_agent_kind: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name = 'kind'",
         [],
@@ -245,6 +405,27 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         );",
     )?;
 
+    app_meta::ensure_app_meta_table(conn)?;
+    projects::ensure_projects_tables(conn)?;
+    presets::ensure_presets_tables(conn)?;
+    migrate_agent_project_preset_assignments(conn)?;
+
+    Ok(())
+}
+
+pub(crate) fn sync_legacy_agent_preset_assignments(
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<()> {
+    migrate_agent_project_preset_assignments(conn)
+}
+
+fn migrate_agent_project_preset_assignments(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO agent_project_preset_assignments (project_id, agent_id, preset_id, config_overrides)
+         SELECT ppa.project_id, ap.agent_id, ppa.preset_id, ppa.config_overrides
+         FROM project_preset_assignments ppa
+         INNER JOIN agent_projects ap ON ap.project_id = ppa.project_id;",
+    )?;
     Ok(())
 }
 

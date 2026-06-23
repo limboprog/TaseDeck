@@ -1,53 +1,59 @@
 #!/usr/bin/env node
 /**
- * Simulates a Cursor-like agent talking to the TaseDeck topology aggregator MCP:
- *   1. initialize + tools/list (aggregator meta-tools)
- *   2. call_tool list_servers
- *   3. call_tool tools(server_id) for test MCP
- *   4. call_tool call_tool(server_id, log_message, …)
- *
- * Prerequisites:
- *   - Topology is playing in TaseDeck (bridge TCP is up)
- *   - test_mcp is installed, linked to an agent, edge enabled + active
+ * Simulates a Cursor-like agent via proxy.mjs + sidecar config.
  *
  * Usage:
- *   TASEDECK_BRIDGE_PORT=60382 node simulate-cursor-agent.mjs
- *   TASEDECK_BRIDGE_PORT=60382 npm run simulate-agent
- *
- * Optional env:
- *   TASEDECK_BRIDGE_HOST       default 127.0.0.1
- *   TASEDECK_TOPOLOGY_ID       optional label for aggregator logs
- *   TEST_MCP_SERVER_NAME       substring to find server in list_servers (default: test)
- *   TASEDECK_AGGREGATOR_PATH   override path to topology_aggregator.mjs
+ *   node simulate-cursor-agent.mjs
+ *   TEST_MCP_SERVER_NAME=test node simulate-cursor-agent.mjs
  */
 
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createMcpStdioSession,
-  parseToolJson,
   toolResultText,
 } from "./mcp_stdio_client.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const bridgePort = process.env.TASEDECK_BRIDGE_PORT?.trim();
-const bridgeHost = process.env.TASEDECK_BRIDGE_HOST?.trim() || "127.0.0.1";
-const topologyId = process.env.TASEDECK_TOPOLOGY_ID?.trim() || "agent-sim";
 const serverNameHint = process.env.TEST_MCP_SERVER_NAME?.trim() || "test";
-const aggregatorPath =
-  process.env.TASEDECK_AGGREGATOR_PATH?.trim() ||
-  path.resolve(__dirname, "../src-tauri/resources/topology_aggregator.mjs");
+const proxyPath =
+  process.env.TASEDECK_PROXY_PATH?.trim() ||
+  path.resolve(__dirname, "../src-tauri/resources/proxy.mjs");
+const downstreamScript =
+  process.env.TEST_MCP_DOWNSTREAM?.trim() ||
+  path.resolve(__dirname, "server.mjs");
 
-function usage() {
-  console.error(`Usage: TASEDECK_BRIDGE_PORT=<port> node simulate-cursor-agent.mjs
+const APP_DIR_NAME = "TaseDeck";
 
-Get bridge port from TaseDeck after pressing Play on a topology
-(topology status / mcp.json entry TASEDECK_BRIDGE_PORT).
+function platformDataDir() {
+  const home = os.homedir();
+  if (process.platform === "darwin") {
+    return path.join(home, "Library", "Application Support");
+  }
+  if (process.platform === "win32") {
+    return process.env.APPDATA || path.join(home, "AppData", "Roaming");
+  }
+  return process.env.XDG_DATA_HOME || path.join(home, ".local", "share");
+}
 
-Example:
-  TASEDECK_BRIDGE_PORT=60382 node ${path.basename(fileURLToPath(import.meta.url))}
-`);
+function userStorageDir() {
+  return path.join(platformDataDir(), APP_DIR_NAME, "User", "Storage");
+}
+
+function sanitizeFilename(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return "mcp-server";
+  }
+  return trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function proxySpoolPath(projectId, serverName) {
+  const safe = sanitizeFilename(serverName);
+  return path.join(userStorageDir(), "proxy-spool", String(projectId), `${safe}.jsonl`);
 }
 
 function step(title) {
@@ -59,94 +65,72 @@ function fail(message) {
   process.exit(1);
 }
 
-if (!bridgePort || !/^\d+$/.test(bridgePort)) {
-  usage();
-  process.exit(1);
-}
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tasedeck-proxy-sim-"));
+const sidecarPath = path.join(tmpRoot, ".tasedeck", "mcp", `${serverNameHint}.json`);
 
-console.log("Cursor agent simulation → topology aggregator");
-console.log({
-  bridgeHost,
-  bridgePort,
-  topologyId,
-  aggregatorPath,
-  serverNameHint,
-});
+fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+fs.writeFileSync(
+  sidecarPath,
+  JSON.stringify(
+    {
+      serverId: 1,
+      serverName: serverNameHint,
+      projectId: 0,
+      command: "node",
+      args: [downstreamScript],
+      env: {},
+      toolEnabled: {},
+      caller: "cursor-sim",
+      idleShutdownMs: 300_000,
+    },
+    null,
+    2,
+  ),
+);
 
-const session = createMcpStdioSession("node", [aggregatorPath], {
-  TASEDECK_BRIDGE_HOST: bridgeHost,
-  TASEDECK_BRIDGE_PORT: bridgePort,
-  TASEDECK_TOPOLOGY_ID: topologyId,
+console.log("Cursor agent simulation → proxy + sidecar");
+console.log({ proxyPath, sidecarPath, downstreamScript });
+
+const session = createMcpStdioSession("node", [proxyPath, "--config", sidecarPath], {
+  TASEDECK_SERVER_CONFIG: sidecarPath,
 });
 
 try {
-  step("0. initialize");
+  step("1. initialize");
   await session.initialize("cursor");
 
-  step("1. tools/list (aggregator meta-tools)");
-  const aggregatorTools = await session.listTools();
-  const toolNames = (aggregatorTools.tools ?? []).map((tool) => tool.name);
-  console.log(toolNames.join(", "));
-  for (const required of ["list_servers", "tools", "call_tool"]) {
-    if (!toolNames.includes(required)) {
-      fail(`aggregator is missing meta-tool: ${required}`);
-    }
+  step("2. tools/list (native tools, filtered by sidecar)");
+  const toolsPayload = await session.listTools();
+  const remoteTools = toolsPayload.tools ?? [];
+  console.log(remoteTools.map((tool) => tool.name).join(", "));
+  if (remoteTools.length === 0) {
+    fail("proxy returned no tools");
   }
 
-  step("2. call_tool list_servers");
-  const serversPayload = parseToolJson(await session.callTool("list_servers", {}));
-  const servers = serversPayload?.servers;
-  if (!Array.isArray(servers) || servers.length === 0) {
-    fail(
-      "no active MCP servers in topology — link test_mcp to an agent, enable edge, press Play",
-    );
-  }
-  console.log(JSON.stringify(servers, null, 2));
-
-  const testServer = servers.find((entry) =>
-    String(entry.name ?? "")
-      .toLowerCase()
-      .includes(serverNameHint.toLowerCase()),
-  );
-  if (!testServer?.id) {
-    fail(
-      `server matching "${serverNameHint}" not found in list_servers. Names: ${servers
-        .map((entry) => entry.name)
-        .join(", ")}`,
-    );
-  }
-  console.log(`Selected server: id=${testServer.id} name=${testServer.name}`);
-
-  step(`3. call_tool tools(server_id=${testServer.id})`);
-  const toolsPayload = parseToolJson(
-    await session.callTool("tools", { server_id: testServer.id }),
-  );
-  const remoteTools = toolsPayload?.tools ?? [];
-  console.log(
-    `serverName=${toolsPayload?.serverName ?? testServer.name} tools=${remoteTools
-      .map((tool) => tool.name)
-      .join(", ")}`,
-  );
-  if (!remoteTools.some((tool) => tool.name === "log_message")) {
-    console.warn("WARN: log_message not in remote tools — using echo_message");
-  }
   const toolToCall = remoteTools.some((tool) => tool.name === "log_message")
     ? "log_message"
-    : "echo_message";
+    : remoteTools.some((tool) => tool.name === "echo_message")
+      ? "echo_message"
+      : remoteTools[0].name;
   const toolArgs =
     toolToCall === "log_message"
       ? { message: "Hello from Cursor agent simulation", level: "INFO" }
-      : { message: "Hello from Cursor agent simulation" };
+      : toolToCall === "echo_message"
+        ? { message: "Hello from Cursor agent simulation" }
+        : {};
 
-  step(`4. call_tool call_tool → ${toolToCall}`);
-  const callPayload = await session.callTool("call_tool", {
-    server_id: testServer.id,
-    name: toolToCall,
-    arguments: toolArgs,
-  });
+  step(`3. tools/call → ${toolToCall}`);
+  const callPayload = await session.callTool(toolToCall, toolArgs);
   console.log(toolResultText(callPayload));
 
-  console.log("\nOK — agent flow completed (check tauri dev stderr for [tasedeck-test-mcp] logs)");
+  if (fs.existsSync(proxySpoolPath(0, serverNameHint))) {
+    console.log("\nUsage log line:");
+    console.log(
+      fs.readFileSync(proxySpoolPath(0, serverNameHint), "utf8").trim(),
+    );
+  }
+
+  console.log("\nOK — proxy flow completed");
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   fail(message);

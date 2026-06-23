@@ -45,6 +45,11 @@ export type InstallMcpLocalRequest = {
 
 export const MCP_INSTALLED_EVENT = "mcp-installed";
 export const MCP_REMOVED_EVENT = "mcp-removed";
+export const MCP_CATALOG_CHANGED_EVENT = "mcp-catalog-changed";
+
+export function notifyMcpCatalogChanged() {
+  window.dispatchEvent(new CustomEvent(MCP_CATALOG_CHANGED_EVENT));
+}
 
 export function notifyMcpInstalled(server: InstalledMcpServer) {
   window.dispatchEvent(

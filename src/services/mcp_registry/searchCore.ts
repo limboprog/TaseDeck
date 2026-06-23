@@ -47,8 +47,27 @@ function isBetterRank(
   return viaTitle && !current.viaTitle;
 }
 
-function displayTitle(entry: McpServerEntry): string {
-  return entry.server.title ?? entry.server.name;
+export function displayTitle(entry: McpServerEntry): string {
+  return entry.server.title?.trim() || entry.server.name.trim();
+}
+
+function searchableLabels(entry: McpServerEntry): Array<{ label: string; viaTitle: boolean }> {
+  const labels: Array<{ label: string; viaTitle: boolean }> = [];
+  const title = entry.server.title?.trim();
+  const name = entry.server.name.trim();
+
+  if (title) {
+    labels.push({ label: title, viaTitle: true });
+  }
+  if (name) {
+    labels.push({ label: name, viaTitle: false });
+    const slashIndex = name.lastIndexOf("/");
+    if (slashIndex >= 0 && slashIndex < name.length - 1) {
+      labels.push({ label: name.slice(slashIndex + 1), viaTitle: false });
+    }
+  }
+
+  return labels;
 }
 
 export function getMatchRank(
@@ -62,26 +81,14 @@ export function getMatchRank(
 
   let best: MatchRank | null = null;
 
-  const consider = (value: string, viaTitle: boolean) => {
-    const index = value.toLowerCase().indexOf(query);
+  for (const { label, viaTitle } of searchableLabels(entry)) {
+    const index = label.toLowerCase().indexOf(query);
     if (index === -1) {
-      return;
+      continue;
     }
 
     if (!best || isBetterRank(index, viaTitle, best)) {
       best = { index, viaTitle };
-    }
-  };
-
-  if (entry.server.title) {
-    consider(entry.server.title, true);
-  }
-
-  if (entry.server.name) {
-    consider(entry.server.name, false);
-    const slashIndex = entry.server.name.lastIndexOf("/");
-    if (slashIndex >= 0 && slashIndex < entry.server.name.length - 1) {
-      consider(entry.server.name.slice(slashIndex + 1), false);
     }
   }
 

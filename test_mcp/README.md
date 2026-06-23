@@ -173,24 +173,16 @@ npm start
 
 ---
 
-## 5. Симуляция агента Cursor → агрегатор топологии
+## 5. Симуляция агента Cursor → proxy.mjs
 
-Проверяет полный путь, как у Cursor после **Play** на топологии:
+Проверяет путь, как у Cursor после экспорта проекта:
 
-1. `tools/list` — мета-tools агрегатора (`list_servers`, `tools`, `call_tool`)
-2. `call_tool list_servers` — список активных MCP в топологии
-3. `call_tool tools` — tools у test MCP (по имени, содержащему `test`)
-4. `call_tool call_tool` — вызов `log_message` (или `echo_message` как fallback)
-
-**Подготовка:**
-
-1. test MCP добавлен в TaseDeck и связан с агентом на графе (ребро включено, сервер active).
-2. На топологии нажат **Play** — bridge поднят.
-3. Узнайте порт из статуса топологии или из `mcp.json` агента: `TASEDECK_BRIDGE_PORT`.
+1. `proxy.mjs` читает sidecar из `.tasedeck/mcp/<name>.json`
+2. Токен OAuth и usage-логи пишутся в app storage (`~/Library/Application Support/TaseDeck/User/Storage/`), пути вычисляются в рантайме
+3. `tools/list` / `tools/call` идут через proxy к downstream stdio-серверу
 
 ```bash
 cd test_mcp
-export TASEDECK_BRIDGE_PORT=60382   # ваш порт
 npm run simulate-agent
 # или
 ./simulate-agent.sh
@@ -200,11 +192,12 @@ npm run simulate-agent
 
 | Env | Значение |
 |-----|----------|
-| `TEST_MCP_SERVER_NAME` | подстрока в имени сервера (по умолчанию `test`) |
-| `TASEDECK_TOPOLOGY_ID` | метка в логах агрегатора |
-| `TASEDECK_AGGREGATOR_PATH` | путь к `topology_aggregator.mjs` |
+| `TEST_MCP_SERVER_NAME` | имя sidecar / сервера (по умолчанию `test`) |
+| `TEST_MCP_DOWNSTREAM` | путь к downstream MCP (по умолчанию `./server.mjs`) |
+| `TASEDECK_PROXY_PATH` | путь к `proxy.mjs` (по умолчанию `../src-tauri/resources/proxy.mjs`) |
 
-В stderr `npm run tauri dev` должны появиться строки `[tasedeck-test-mcp] … log_message …`.
+После успешного `tools/call` строка usage появится в  
+`~/Library/Application Support/TaseDeck/User/Storage/proxy-spool/0/<name>.jsonl`.
 
 ---
 
@@ -213,10 +206,10 @@ npm run simulate-agent
 | Файл | Назначение |
 |------|------------|
 | `server.mjs` | MCP stdio сервер |
-| `simulate-cursor-agent.mjs` | симуляция Cursor → агрегатор → test MCP |
+| `simulate-cursor-agent.mjs` | симуляция Cursor → proxy.mjs → test MCP |
 | `mcp_stdio_client.mjs` | минимальный MCP stdio клиент для скриптов |
 | `run.sh` | то же: `./run.sh` |
-| `simulate-agent.sh` | обёртка с проверкой `TASEDECK_BRIDGE_PORT` |
+| `simulate-agent.sh` | обёртка: `./simulate-agent.sh` |
 | `package.json` | `npm start`, `npm run simulate-agent` |
 | `print-setup.sh` | выводит готовую команду для вставки в TaseDeck |
 

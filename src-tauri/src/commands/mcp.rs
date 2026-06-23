@@ -1,3 +1,4 @@
+use crate::agents::project_proxy_export::schedule_projects_using_server_export;
 use crate::core::shell::run_shell_checked;
 use crate::db::mcp_config::can_attempt_mcp_tools;
 use crate::db::{Database, InstallMcpLocalRequest, McpServer, McpServerType};
@@ -7,7 +8,8 @@ use crate::services::{
     compile_run_command_template_from_config_values, list_mcp_run_transports, mcp_server_for_runtime,
     probe_mcp_operation, reveal_config_values_for_api, seal_config_values_for_storage,
     McpProbeResult, McpServerAnalysis, McpServerApi, McpServerToolsSnapshot, McpToolsStore,
-    McpTransportCatalogEntry, OAuthStore, RegistryEntry, RegistryInstallPlan, UsageLogStore,
+    McpTransportCatalogEntry, OAuthStore, ProxyLogIngestor, RegistryEntry, RegistryInstallPlan,
+    UsageLogStore,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -173,6 +175,7 @@ pub async fn mcp_probe_operation(
     usage_log: State<'_, Arc<UsageLogStore>>,
     server_id: i64,
     operation: String,
+    record_usage: Option<bool>,
 ) -> AppResult<McpProbeResult> {
     let server = db
         .get_mcp_server(server_id)?
@@ -180,6 +183,7 @@ pub async fn mcp_probe_operation(
 
     let mcp_name = server.name.clone();
     let tool_name = probe_tool_label(&operation);
+    let should_record = record_usage.unwrap_or(false);
     let usage_log = Arc::clone(usage_log.inner());
     let oauth = Arc::clone(oauth.inner());
 
@@ -192,14 +196,17 @@ pub async fn mcp_probe_operation(
         crate::error::AppError::Message(format!("MCP probe failed to run: {error}"))
     })??;
 
-    if probe.success {
-        usage_log.record_success(
-            mcp_name,
-            tool_name,
-            &serde_json::json!({ "output": probe.result }),
-        );
-    } else {
-        usage_log.record_error(mcp_name, tool_name, probe.result.clone());
+    if should_record {
+        if probe.success {
+            usage_log.record_tool_call_success(
+                mcp_name,
+                tool_name,
+                "user",
+                &serde_json::json!({ "output": probe.result }),
+            );
+        } else {
+            usage_log.record_tool_call_error(mcp_name, tool_name, "user", probe.result.clone());
+        }
     }
 
     Ok(probe)
@@ -239,7 +246,7 @@ pub fn mcp_remove_server(
     store: State<'_, Arc<McpToolsStore>>,
     server_id: i64,
 ) -> AppResult<bool> {
-    let removed = db.delete_mcp_server(server_id)?;
+    let removed = db.remove_mcp_server_from_catalog(server_id)?;
     if removed {
         store.unregister_server(server_id);
     }
@@ -280,4 +287,53 @@ pub async fn mcp_install_local(
     let prepared = server_for_storage(request.server, None)?;
     let inserted = db.insert_mcp_server(&prepared)?;
     server_for_api(inserted)
+}
+
+#[tauri::command]
+pub fn mcp_get_tool_prefs(
+    db: State<'_, Arc<Database>>,
+    server_id: i64,
+) -> AppResult<std::collections::HashMap<String, bool>> {
+    Ok(db.load_mcp_tool_prefs(server_id)?)
+}
+
+#[tauri::command]
+pub fn mcp_set_tool_pref(
+    db: State<'_, Arc<Database>>,
+    oauth: State<'_, Arc<OAuthStore>>,
+    tools_store: State<'_, Arc<McpToolsStore>>,
+    ingestor: State<'_, Arc<ProxyLogIngestor>>,
+    server_id: i64,
+    tool_name: String,
+    enabled: bool,
+) -> AppResult<bool> {
+    db.set_mcp_tool_pref(server_id, &tool_name, enabled)?;
+    schedule_projects_using_server_export(
+        Arc::clone(db.inner()),
+        Arc::clone(oauth.inner()),
+        Arc::clone(tools_store.inner()),
+        server_id,
+    );
+    let _ = ingestor.poll_once();
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn mcp_replace_tool_prefs(
+    db: State<'_, Arc<Database>>,
+    oauth: State<'_, Arc<OAuthStore>>,
+    tools_store: State<'_, Arc<McpToolsStore>>,
+    ingestor: State<'_, Arc<ProxyLogIngestor>>,
+    server_id: i64,
+    prefs: std::collections::HashMap<String, bool>,
+) -> AppResult<bool> {
+    db.replace_mcp_tool_prefs(server_id, &prefs)?;
+    schedule_projects_using_server_export(
+        Arc::clone(db.inner()),
+        Arc::clone(oauth.inner()),
+        Arc::clone(tools_store.inner()),
+        server_id,
+    );
+    let _ = ingestor.poll_once();
+    Ok(true)
 }

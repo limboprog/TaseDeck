@@ -6,3 +6,6 @@ export const MCP_CARD_HEADER_Z_INDEX = 10;
 
 /** Hides list content that scrolls above sticky card headers (single global scroll). */
 export const MCP_LIST_SCROLL_CLIP_Z_INDEX = 8;
+
+/** Sticky Installed / Market section headers in the MCP list. */
+export const MCP_LIST_SECTION_HEADER_Z_INDEX = 6;

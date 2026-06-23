@@ -12,6 +12,7 @@ import {
   findScrollParent,
   preserveScrollWhile,
 } from "./preserveScrollOnLayout";
+import { ToolDescriptionMarkup, MCP_TOOL_READABLE_TEXT } from "./toolDescriptionMarkup";
 
 type McpToolsListProps = {
   tools: McpToolInfo[];
@@ -19,6 +20,7 @@ type McpToolsListProps = {
   error?: string | null;
   toolEnabled: Record<string, boolean>;
   onToggleTool: (toolName: string, enabled: boolean) => void;
+  showToggles?: boolean;
 };
 
 function formatToolSchema(schema: unknown): string {
@@ -73,7 +75,7 @@ function ToolSchemaSection({ schemaText }: { schemaText: string }) {
           style={{
             margin: 0,
             padding: 0,
-            color: colors.foreground,
+            color: MCP_TOOL_READABLE_TEXT,
             fontSize: 13,
             lineHeight: "20px",
             fontFamily: "ui-monospace, monospace",
@@ -93,10 +95,12 @@ function ToolRow({
   tool,
   enabled,
   onToggleEnabled,
+  showToggle,
 }: {
   tool: McpToolInfo;
   enabled: boolean;
   onToggleEnabled: (enabled: boolean) => void;
+  showToggle: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -145,17 +149,17 @@ function ToolRow({
             {tool.name}
           </Text>
         </XStack>
-        <ToolToggle
-          checked={enabled}
-          onChange={onToggleEnabled}
-          ariaLabel={`${enabled ? "Disable" : "Enable"} tool ${tool.name}`}
-        />
+        {showToggle ? (
+          <ToolToggle
+            checked={enabled}
+            onChange={onToggleEnabled}
+            ariaLabel={`${enabled ? "Disable" : "Enable"} tool ${tool.name}`}
+          />
+        ) : null}
       </XStack>
       {expanded ? (
         <YStack px={10} pb={10} pt={0} gap={10}>
-          <Text color={colors.muted} fontSize={13} lineHeight={20} select="none">
-            {tool.description || "No description provided."}
-          </Text>
+          <ToolDescriptionMarkup text={tool.description || ""} />
           {schemaText ? <ToolSchemaSection schemaText={schemaText} /> : null}
         </YStack>
       ) : null}
@@ -169,6 +173,7 @@ export function McpToolsList({
   error = null,
   toolEnabled,
   onToggleTool,
+  showToggles = true,
 }: McpToolsListProps) {
   if (loading) {
     return (
@@ -193,6 +198,7 @@ export function McpToolsList({
             tool={tool}
             enabled={toolEnabled[tool.name] !== false}
             onToggleEnabled={(next) => onToggleTool(tool.name, next)}
+            showToggle={showToggles}
           />
         ))}
       </YStack>

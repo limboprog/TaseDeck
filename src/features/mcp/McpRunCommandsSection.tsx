@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { YStack } from "tamagui";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Text, XStack, YStack } from "tamagui";
+import { ToolToggle } from "../../components/ToolToggle";
 import { useMcpTransportCatalog } from "../../services/catalog";
 import { resolveRunCommandsState } from "../../services/mcp_installed/configState";
 import {
   RUN_COMMANDS_CONFIG_KEY,
   TRANSPORT_LABELS,
   compileRemoteRequestPreview,
+  compileRunCommandShell,
   compileRunCommandTemplate,
   createEmptyRunCommand,
   createEmptyRunCommandArg,
@@ -64,6 +66,7 @@ type McpRunCommandsSectionProps = {
   headers: HeaderVariableRow[];
   onChange: (state: RunCommandsState) => void;
   onHeadersChange: (headers: HeaderVariableRow[]) => void;
+  headerTrailing?: ReactNode;
 };
 
 function TransportBashTable({
@@ -380,52 +383,145 @@ function ArgumentsTable({
   );
 }
 
-function CompiledCommandTable({
+function RunCommandOutputSection({
   command,
   isRemote,
+  rawMode,
+  rawCommand,
+  onRawModeChange,
+  onRawCommandChange,
 }: {
   command: string;
   isRemote: boolean;
+  rawMode: boolean;
+  rawCommand: string;
+  onRawModeChange: (next: boolean) => void;
+  onRawCommandChange: (next: string) => void;
 }) {
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   useMcpExpandedRow(expandedRowId, setExpandedRowId, tableRef);
 
-  const display = command.trim();
   const sectionTitle = isRemote ? "Request" : "Compiled command";
   const columnLabel = isRemote ? "Request" : "bash";
+  const display = command.trim();
   const isExpanded = expandedRowId === COMPILED_ROW_ID;
+
+  const interactiveShellStyle = { width: "100%", minWidth: 0 } as const;
 
   return (
     <YStack gap={8}>
-      <SectionLabel>{sectionTitle}</SectionLabel>
-      <McpDataTable
-        shellRef={tableRef}
-        gridColumns={COMPILED_GRID}
-        columns={[
-          {
-            key: "bash",
-            header: (
-              <>
-                <McpTableHeaderLabel>{columnLabel}</McpTableHeaderLabel>
-                <McpTableHeaderCopy value={display} disabled={!display} />
-              </>
-            ),
-            headerStyle: { justifyContent: "space-between" },
-          },
-        ]}
-      >
-        <McpTableRow rowId={COMPILED_ROW_ID}>
-          <McpTableCell isLastRow isRowExpanded={isExpanded}>
-            <McpTablePlainText
-              value={display}
-              placeholder="—"
-              monospace
-              isRowExpanded={isExpanded}
-            />
-          </McpTableCell>
-        </McpTableRow>
-      </McpDataTable>
+      <XStack width="100%" items="center" justify="space-between" gap={12}>
+        <SectionLabel>{rawMode ? (isRemote ? "Raw request" : "Raw command") : sectionTitle}</SectionLabel>
+        <XStack items="center" gap={8} shrink={0}>
+          <Text color={colors.muted} fontSize={11} fontWeight="500" select="none">
+            Use raw mode
+          </Text>
+          <ToolToggle
+            checked={rawMode}
+            onChange={(next) => {
+              if (next) {
+                setExpandedRowId(COMPILED_ROW_ID);
+              }
+              onRawModeChange(next);
+            }}
+            ariaLabel="Use raw mode"
+          />
+        </XStack>
+      </XStack>
+
+      {rawMode ? (
+        <McpDataTable
+          shellRef={tableRef}
+          gridColumns={COMPILED_GRID}
+          columns={[
+            {
+              key: "bash",
+              header: (
+                <>
+                  <McpTableHeaderLabel>{columnLabel}</McpTableHeaderLabel>
+                  <McpTableHeaderCopy value={rawCommand} disabled={!rawCommand.trim()} />
+                </>
+              ),
+              headerStyle: { justifyContent: "space-between" },
+            },
+          ]}
+        >
+          <McpTableRow rowId={COMPILED_ROW_ID}>
+            <McpTableCell isLastRow isRowExpanded={isExpanded}>
+              {isExpanded ? (
+                <div data-mcp-row-interactive style={interactiveShellStyle}>
+                  <textarea
+                    value={rawCommand}
+                    onChange={(event) => onRawCommandChange(event.target.value)}
+                    placeholder={isRemote ? "POST https://…" : "npx -y @modelcontextprotocol/server-filesystem /path"}
+                    rows={4}
+                    style={{
+                      width: "100%",
+                      minHeight: 88,
+                      resize: "vertical",
+                      border: "none",
+                      outline: "none",
+                      background: "transparent",
+                      color: colors.foreground,
+                      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                      fontSize: 12,
+                      lineHeight: "18px",
+                      padding: 0,
+                    }}
+                  />
+                </div>
+              ) : (
+                <McpTablePlainText
+                  value={rawCommand}
+                  placeholder={isRemote ? "POST https://…" : "npx -y @modelcontextprotocol/server-filesystem /path"}
+                  monospace
+                  isRowExpanded={false}
+                />
+              )}
+            </McpTableCell>
+          </McpTableRow>
+        </McpDataTable>
+      ) : (
+        <McpDataTable
+          shellRef={tableRef}
+          gridColumns={COMPILED_GRID}
+          columns={[
+            {
+              key: "bash",
+              header: (
+                <>
+                  <McpTableHeaderLabel>{columnLabel}</McpTableHeaderLabel>
+                  <McpTableHeaderCopy value={display} disabled={!display} />
+                </>
+              ),
+              headerStyle: { justifyContent: "space-between" },
+            },
+          ]}
+        >
+          <McpTableRow rowId={COMPILED_ROW_ID}>
+            <McpTableCell isLastRow isRowExpanded={isExpanded}>
+              {isExpanded ? (
+                <div data-mcp-row-interactive style={interactiveShellStyle}>
+                  <McpTablePlainText
+                    value={display}
+                    placeholder="—"
+                    monospace
+                    isRowExpanded
+                  />
+                </div>
+              ) : (
+                <McpTablePlainText
+                  value={display}
+                  placeholder="—"
+                  monospace
+                  isRowExpanded={false}
+                />
+              )}
+            </McpTableCell>
+          </McpTableRow>
+        </McpDataTable>
+      )}
     </YStack>
   );
 }
@@ -436,6 +532,7 @@ export function McpRunCommandsSection({
   headers,
   onChange,
   onHeadersChange,
+  headerTrailing,
 }: McpRunCommandsSectionProps) {
   const transportCatalog = useMcpTransportCatalog();
   const transportOptions = useMemo(
@@ -486,6 +583,9 @@ export function McpRunCommandsSection({
   const isRemote =
     activeProfile != null && isRemoteRunTransport(activeProfile.transport);
 
+  const rawMode = Boolean(state.rawMode);
+  const rawCommand = state.rawCommand ?? "";
+
   const compiledCommand = useMemo(() => {
     if (!activeProfile) {
       return "";
@@ -493,48 +593,70 @@ export function McpRunCommandsSection({
     if (activeProfile.transport !== "stdio") {
       return compileRemoteRequestPreview(activeProfile, { headers, env });
     }
-    return compileRunCommandTemplate(activeProfile, sharedArgs);
+    return compileRunCommandShell(activeProfile, env, undefined, sharedArgs);
   }, [activeProfile, sharedArgs, headers, env]);
 
   return (
     <YStack gap={8}>
-      <McpSectionHeader title="Run commands" />
+      <McpSectionHeader title="Run commands" trailing={headerTrailing} />
 
-      <TransportBashTable
-        commands={state.commands}
-        activeId={state.activeId}
-        env={env}
-        expandedRowId={expandedRowId}
-        transportOptions={transportOptions}
-        onSelect={(id) => onChange({ ...state, activeId: id })}
-        onChange={updateProfile}
-        onRemove={removeProfile}
-        composerOpen={composerOpen}
-        onAddClick={() => setComposerOpen(true)}
-        onPickTransport={addTransport}
-        onCancelComposer={() => setComposerOpen(false)}
-        tableRef={tableRef}
-      />
+      <YStack
+        gap={8}
+        opacity={rawMode ? 0.42 : 1}
+        pointerEvents={rawMode ? "none" : "auto"}
+        style={{ transition: "opacity 0.15s ease" }}
+      >
+        <TransportBashTable
+          commands={state.commands}
+          activeId={state.activeId}
+          env={env}
+          expandedRowId={expandedRowId}
+          transportOptions={transportOptions}
+          onSelect={(id) => onChange({ ...state, activeId: id })}
+          onChange={updateProfile}
+          onRemove={removeProfile}
+          composerOpen={composerOpen}
+          onAddClick={() => setComposerOpen(true)}
+          onPickTransport={addTransport}
+          onCancelComposer={() => setComposerOpen(false)}
+          tableRef={tableRef}
+        />
 
-      {state.commands.length > 0 ? (
-        isRemote ? (
-          <HeadersTable
-            headers={headers}
-            env={env}
-            onChange={onHeadersChange}
-          />
-        ) : (
-          <ArgumentsTable
-            args={sharedArgs}
-            env={env}
-            onChange={(nextArgs) => onChange({ ...state, sharedArgs: nextArgs })}
-          />
-        )
-      ) : null}
+        {state.commands.length > 0 ? (
+          isRemote ? (
+            <HeadersTable
+              headers={headers}
+              env={env}
+              onChange={onHeadersChange}
+            />
+          ) : (
+            <ArgumentsTable
+              args={sharedArgs}
+              env={env}
+              onChange={(nextArgs) => onChange({ ...state, sharedArgs: nextArgs })}
+            />
+          )
+        ) : null}
+      </YStack>
 
-      <CompiledCommandTable
+      <RunCommandOutputSection
         command={compiledCommand}
         isRemote={activeProfile != null && activeProfile.transport !== "stdio"}
+        rawMode={rawMode}
+        rawCommand={rawCommand}
+        onRawModeChange={(next) => {
+          const nextState = { ...state, rawMode: next };
+          if (next && !nextState.rawCommand?.trim() && activeProfile) {
+            const seed = isRemote
+              ? compileRunCommandTemplate(activeProfile, sharedArgs)
+              : compiledCommand;
+            if (seed.trim()) {
+              nextState.rawCommand = seed;
+            }
+          }
+          onChange(nextState);
+        }}
+        onRawCommandChange={(next) => onChange({ ...state, rawCommand: next })}
       />
     </YStack>
   );

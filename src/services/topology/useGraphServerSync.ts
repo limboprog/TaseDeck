@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { getGraphState, saveGraphLinks } from "./graphApi";
 import { applyServerLinksToTopology, buildLinkInputs } from "./graphState";
 import type { TopologyBlock, TopologyEdge, TopologyNode } from "./types";
@@ -52,7 +52,6 @@ export function useGraphServerSync({
   onHydrate,
   onError,
 }: UseGraphServerSyncOptions) {
-  const [hydrating, setHydrating] = useState(true);
   const nodesRef = useRef(nodes);
   const blocksRef = useRef(blocks);
   const edgesRef = useRef(edges);
@@ -61,6 +60,7 @@ export function useGraphServerSync({
   const onErrorRef = useRef(onError);
   const hydratedRef = useRef(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hydrateRequestRef = useRef(0);
 
   nodesRef.current = nodes;
   blocksRef.current = blocks;
@@ -70,13 +70,13 @@ export function useGraphServerSync({
   onErrorRef.current = onError;
 
   useEffect(() => {
-    let cancelled = false;
+    const requestId = hydrateRequestRef.current + 1;
+    hydrateRequestRef.current = requestId;
     hydratedRef.current = false;
-    setHydrating(true);
 
     getGraphState(clientId, name)
       .then((state) => {
-        if (cancelled) {
+        if (requestId !== hydrateRequestRef.current) {
           return;
         }
 
@@ -109,20 +109,16 @@ export function useGraphServerSync({
         hydratedRef.current = true;
       })
       .catch((reason: unknown) => {
-        if (!cancelled) {
-          const message = reason instanceof Error ? reason.message : String(reason);
-          onErrorRef.current?.(message);
-          hydratedRef.current = true;
+        if (requestId !== hydrateRequestRef.current) {
+          return;
         }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setHydrating(false);
-        }
+        const message = reason instanceof Error ? reason.message : String(reason);
+        onErrorRef.current?.(message);
+        hydratedRef.current = true;
       });
 
     return () => {
-      cancelled = true;
+      hydrateRequestRef.current += 1;
     };
   }, [clientId, name]);
 
@@ -168,5 +164,5 @@ export function useGraphServerSync({
     });
   };
 
-  return { syncNow, hydrating };
+  return { syncNow };
 }

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { IoAdd } from "../../icons";
 import { XStack } from "tamagui";
 import { borders, colors, surfaces, whiteAlpha } from "../../theme";
@@ -8,6 +9,7 @@ type McpSectionHeaderProps = {
   onAdd?: () => void;
   addDisabled?: boolean;
   addLabel?: string;
+  trailing?: ReactNode;
 };
 
 export function McpSectionHeader({
@@ -15,33 +17,39 @@ export function McpSectionHeader({
   onAdd,
   addDisabled = false,
   addLabel = "Add",
+  trailing,
 }: McpSectionHeaderProps) {
   return (
     <XStack items="center" justify="space-between" gap={8}>
       <SectionLabel>{title}</SectionLabel>
-      {onAdd ? (
-        <button
-          type="button"
-          onClick={onAdd}
-          disabled={addDisabled}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            height: 28,
-            padding: "0 10px",
-            borderRadius: 6,
-            border: `1px solid ${borders.default}`,
-            background: addDisabled ? surfaces.disabled : surfaces.controlHover,
-            color: addDisabled ? whiteAlpha[28] : colors.foreground,
-            fontSize: 11,
-            fontWeight: 500,
-            cursor: addDisabled ? "not-allowed" : "pointer",
-          }}
-        >
-          <IoAdd size={14} />
-          {addLabel}
-        </button>
+      {trailing || onAdd ? (
+        <XStack items="center" gap={4} shrink={0}>
+          {trailing}
+          {onAdd ? (
+            <button
+              type="button"
+              onClick={onAdd}
+              disabled={addDisabled}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                height: 28,
+                padding: "0 10px",
+                borderRadius: 6,
+                border: `1px solid ${borders.default}`,
+                background: addDisabled ? surfaces.disabled : surfaces.controlHover,
+                color: addDisabled ? whiteAlpha[28] : colors.foreground,
+                fontSize: 11,
+                fontWeight: 500,
+                cursor: addDisabled ? "not-allowed" : "pointer",
+              }}
+            >
+              <IoAdd size={14} />
+              {addLabel}
+            </button>
+          ) : null}
+        </XStack>
       ) : null}
     </XStack>
   );

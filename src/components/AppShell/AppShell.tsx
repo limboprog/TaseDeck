@@ -7,11 +7,21 @@ import { Sidebar, type NavId } from "../Sidebar/Sidebar";
 
 type AppShellProps = {
   activeId: NavId;
+  selectedProjectId: string | null;
   onNavigate: (id: NavId) => void;
+  onSelectProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
   children: ReactNode;
 };
 
-export function AppShell({ activeId, onNavigate, children }: AppShellProps) {
+export function AppShell({
+  activeId,
+  selectedProjectId,
+  onNavigate,
+  onSelectProject,
+  onDeleteProject,
+  children,
+}: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { liquidGlass } = useSurfaceMode();
 
@@ -35,7 +45,10 @@ export function AppShell({ activeId, onNavigate, children }: AppShellProps) {
     >
       <Sidebar
         activeId={activeId}
+        selectedProjectId={selectedProjectId}
         onNavigate={onNavigate}
+        onSelectProject={onSelectProject}
+        onDeleteProject={onDeleteProject}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />
@@ -55,19 +68,17 @@ export function AppShell({ activeId, onNavigate, children }: AppShellProps) {
           aria-label="Application"
         >
           {liquidGlass ? (
-            <YStack
-              fullscreen
-              rounded={blocks.shellContent.borderRadius}
-              pointerEvents="none"
-              style={glassGlowStyle}
+            <div
+              aria-hidden
+              style={{
+                position: "absolute",
+                inset: 0,
+                pointerEvents: "none",
+                ...glassGlowStyle,
+              }}
             />
           ) : null}
-
-          <YStack className={layoutClasses.clip} flex={1} minH={0} py={24} px={28} z={1} overflow="hidden">
-            <YStack className={mergeLayoutClass(layoutClasses.clip, layoutClasses.stack)} flex={1} minH={0} overflow="hidden">
-              {children}
-            </YStack>
-          </YStack>
+          {children}
         </YStack>
       </YStack>
     </XStack>

@@ -40,3 +40,7 @@ export function setMcpToolEnabled(serverId: number, toolName: string, enabled: b
 export function loadMcpToolEnabledMap(serverId: number) {
   return loadMap(serverId);
 }
+
+export function replaceMcpToolEnabledMap(serverId: number, map: Record<string, boolean>) {
+  localStorage.setItem(storageKey(serverId), JSON.stringify(map));
+}

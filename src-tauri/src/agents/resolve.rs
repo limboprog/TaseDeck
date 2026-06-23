@@ -24,7 +24,8 @@ pub fn resolve_auto_config_path(kind: &str) -> AppResult<Option<String>> {
     let candidates: Vec<PathBuf> = provider.candidate_config_dirs();
 
     for dir in &candidates {
-        if dir.is_dir() && dir.join("mcp.json").is_file() {
+        let config_path = provider.mcp_config_file_name();
+        if dir.is_dir() && dir.join(config_path).is_file() {
             return Ok(Some(path_to_string(dir.clone())));
         }
     }

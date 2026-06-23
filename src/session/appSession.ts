@@ -28,26 +28,86 @@ export function writePageSession<T>(key: string, value: T) {
 
 export type McpPageSession = {
   search: string;
-  expandedServerIds: number[];
   scrollTop: number;
   pendingManualDraft?: boolean;
+  pendingDetailRegistryKey?: string | null;
+  pendingDetailServerId?: number | null;
+  pendingDetailServerName?: string | null;
+  selectedRegistryKey?: string | null;
+  selectedInstalledId?: number | null;
+  descriptionExpanded?: boolean;
+  installedSectionExpanded?: boolean;
+  marketSectionExpanded?: boolean;
 };
 
 export type AgentsPageSession = {
   search: string;
   scrollTop: number;
+  selectedAgentId: number | null;
+  agentsNavExpanded: boolean;
 };
 
 export const defaultMcpPageSession = (): McpPageSession => ({
   search: "",
-  expandedServerIds: [],
   scrollTop: 0,
+  pendingDetailRegistryKey: null,
+  pendingDetailServerId: null,
+  pendingDetailServerName: null,
+  selectedRegistryKey: null,
+  selectedInstalledId: null,
+  descriptionExpanded: false,
+  installedSectionExpanded: true,
+  marketSectionExpanded: true,
 });
 
 export const defaultAgentsPageSession = (): AgentsPageSession => ({
   search: "",
   scrollTop: 0,
+  selectedAgentId: null,
+  agentsNavExpanded: true,
 });
+
+export type ProjectDetailUiSession = {
+  scrollTop?: number;
+  expandedServerKeys?: string[];
+  addAgentExpanded?: boolean;
+};
+
+export type ProjectsPageSession = {
+  selectedProjectId: string | null;
+  projectsNavExpanded: boolean;
+  projectDetailsById?: Record<string, ProjectDetailUiSession>;
+};
+
+export const PROJECTS_PAGE_SESSION_KEY = "projects";
+
+export const defaultProjectsPageSession = (): ProjectsPageSession => ({
+  selectedProjectId: null,
+  projectsNavExpanded: true,
+  projectDetailsById: {},
+});
+
+export function readProjectDetailUiSession(
+  projectId: string,
+): ProjectDetailUiSession {
+  const page = readPageSession(PROJECTS_PAGE_SESSION_KEY, defaultProjectsPageSession());
+  return page.projectDetailsById?.[projectId] ?? {};
+}
+
+export function writeProjectDetailUiSession(
+  projectId: string,
+  patch: ProjectDetailUiSession,
+) {
+  const page = readPageSession(PROJECTS_PAGE_SESSION_KEY, defaultProjectsPageSession());
+  const prev = page.projectDetailsById?.[projectId] ?? {};
+  writePageSession(PROJECTS_PAGE_SESSION_KEY, {
+    ...page,
+    projectDetailsById: {
+      ...(page.projectDetailsById ?? {}),
+      [projectId]: { ...prev, ...patch },
+    },
+  });
+}
 
 export type WorkspacePageSession = {
   selectedTopologyId: string | null;
@@ -56,6 +116,16 @@ export type WorkspacePageSession = {
 export const defaultWorkspacePageSession = (): WorkspacePageSession => ({
   selectedTopologyId: null,
 });
+
+export type PresetsPageSession = {
+  expandedPresetIds: string[];
+};
+
+export const defaultPresetsPageSession = (): PresetsPageSession => ({
+  expandedPresetIds: [],
+});
+
+export const PRESETS_PAGE_SESSION_KEY = "presets";
 
 export const MARKET_PAGE_SESSION_KEY = "mcp-market";
 

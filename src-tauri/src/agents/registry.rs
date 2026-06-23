@@ -1,5 +1,6 @@
 use crate::agents::builtin::{
-    AntigravityAgent, ClaudeCodeAgent, CopilotAgent, CursorAgent,
+    AntigravityAgent, ClaudeCodeAgent, CodexCliAgent, CopilotAgent, CursorAgent, OpenCodeAgent,
+    VsCodeAgent, WindsurfAgent,
 };
 use crate::agents::traits::AgentConfigProvider;
 use crate::agents::types::AgentCatalogEntry;
@@ -27,6 +28,10 @@ fn all_providers() -> Vec<Arc<dyn AgentConfigProvider>> {
     vec![
         Arc::new(CursorAgent::new()),
         Arc::new(ClaudeCodeAgent::new()),
+        Arc::new(VsCodeAgent::new()),
+        Arc::new(OpenCodeAgent::new()),
+        Arc::new(WindsurfAgent::new()),
+        Arc::new(CodexCliAgent::new()),
         Arc::new(AntigravityAgent::new()),
         Arc::new(CopilotAgent::new()),
     ]

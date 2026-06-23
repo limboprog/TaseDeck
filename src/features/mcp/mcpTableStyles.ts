@@ -33,9 +33,9 @@ export const mcpTransportBlock: CSSProperties = {
 };
 
 export const mcpTransportTitleText: CSSProperties = {
-  color: colors.muted,
+  color: colors.foreground,
   fontSize: 11,
-  fontWeight: 500,
+  fontWeight: 600,
 };
 
 export function mcpTransportRadioStyle(checked: boolean): CSSProperties {
@@ -78,14 +78,31 @@ export const mcpTableLeadingColumnStyle: CSSProperties = {
 
 export const mcpTableHeaderText: CSSProperties = {
   color: colors.muted,
-  fontSize: 11,
+  fontSize: 12,
   fontWeight: 400,
 };
 
+/** Body row copy — 13px reads closer to app body text on light panels. */
+export const MCP_TABLE_BODY_FONT_SIZE = 13;
+export const MCP_TABLE_BODY_LINE_HEIGHT = 20;
+
+export const mcpTableBodyText: CSSProperties = {
+  fontSize: MCP_TABLE_BODY_FONT_SIZE,
+  fontWeight: 400,
+  lineHeight: `${MCP_TABLE_BODY_LINE_HEIGHT}px`,
+  WebkitFontSmoothing: "subpixel-antialiased",
+};
+
+/** Body copy on glass / white panels — softer than `foreground` on light theme. */
+export const mcpTablePanelBodyText: CSSProperties = {
+  ...mcpTableBodyText,
+  color: colors.panelForeground,
+};
+
 export const mcpSubsectionLabel: CSSProperties = {
-  color: colors.muted,
+  color: colors.foreground,
   fontSize: 11,
-  fontWeight: 500,
+  fontWeight: 600,
   display: "block",
 };
 

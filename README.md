@@ -1,7 +1,21 @@
-# Tauri + React + Typescript
+# TaseDeck
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Desktop app for MCP server management, project presets, and agent `mcp.json` sync.
 
-## Recommended IDE Setup
+**Run:** `npm install && npm run tauri dev`
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+**Architecture & pipelines:** see [TECHNICAL.md](./TECHNICAL.md)
+
+## Stack
+
+- **UI:** React 19, TypeScript, Vite, Tamagui
+- **Desktop:** Tauri 2, Rust, SQLite
+- **MCP:** Official registry, local proxy (`proxy.mjs`), OAuth 2.0 PKCE
+
+## Repo layout
+
+| Path | In app build |
+|------|----------------|
+| `src/`, `src-tauri/` | Yes |
+| `backend/`, `web/`, `test_mcp/`, `test/` | No (gitignored) |
+

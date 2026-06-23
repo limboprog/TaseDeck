@@ -1,5 +1,5 @@
 import { MdOutlineJoinLeft } from "../../icons";
-import { WorkspaceIconButton } from "./workspaceIconButton";
+import { ToolbarIconButton } from "../../components/pane";
 
 type WorkspaceToolbarProps = {
   groupToolActive: boolean;
@@ -13,14 +13,14 @@ export function WorkspaceToolbar({ groupToolActive, onToggleGroupTool }: Workspa
 
   return (
     <div title={tooltip}>
-      <WorkspaceIconButton
+      <ToolbarIconButton
         active={groupToolActive}
-        onPress={onToggleGroupTool}
+        onClick={onToggleGroupTool}
         aria-label={tooltip}
         aria-pressed={groupToolActive}
       >
         <MdOutlineJoinLeft size={18} />
-      </WorkspaceIconButton>
+      </ToolbarIconButton>
     </div>
   );
 }

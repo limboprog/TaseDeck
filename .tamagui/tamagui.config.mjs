@@ -936,6 +936,7 @@ Expected a subset of: ${expected.join(", ")}
 // src/theme.ts
 var cssVar = /* @__PURE__ */ __name((name) => `var(${name})`, "cssVar");
 var shared = {
+  // accent: "rgb(126, 78, 178)",
   accent: "#8B5CF6",
   error: "#EF4444",
   errorSoft: "#f87171",
@@ -953,6 +954,8 @@ var colors2 = {
   border: cssVar("--td-border"),
   foreground: cssVar("--td-foreground"),
   muted: cssVar("--td-muted"),
+  treeRail: cssVar("--td-tree-rail"),
+  panelForeground: cssVar("--td-panel-foreground"),
   accent: shared.accent,
   error: shared.error,
   errorSoft: shared.errorSoft,
@@ -1009,6 +1012,10 @@ var borders = {
   selected: whiteAlpha[14],
   dashed: whiteAlpha[14],
   glass: colors2.glassBorder
+};
+var project = {
+  nodeSignificant: cssVar("--td-project-node-significant"),
+  nodeFunctional: cssVar("--td-project-node-functional")
 };
 var graph = {
   nodeBg: cssVar("--td-graph-node-bg"),

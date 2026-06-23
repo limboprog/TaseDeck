@@ -1,79 +1,16 @@
-import { memo, type ReactNode } from "react";
+import { memo } from "react";
 import { IoLogoGithub, PiGlobeThin } from "../../icons";
 import { Text, XStack, YStack } from "tamagui";
 import { McpPanel } from "./McpPanel";
 import { entryKey, type McpServerEntry } from "../../services/mcp_registry";
-import { borders, colors, market, tamaguiSurfaces } from "../../theme";
+import { borders, colors, market } from "../../theme";
 import { McpAddButton } from "./McpAddButton";
-import { openExternal } from "../../utils/openExternal";
-
-const LINK_BLOCK_WIDTH = 104;
+import { formatMcpLinkLabel, McpLinkBlock } from "./mcpLinkBlock";
 
 type McpServerCardProps = {
   entry: McpServerEntry;
   onSelect?: (entry: McpServerEntry) => void;
 };
-
-function formatLinkLabel(url: string, fallback: string) {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./, "");
-    const path = parsed.pathname.replace(/\/$/, "");
-    if (path && path !== "/") {
-      return `${host}${path}`;
-    }
-    return host || fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function CardLinkBlock({
-  href,
-  icon,
-  label,
-}: {
-  href: string;
-  icon: ReactNode;
-  label: string;
-}) {
-  return (
-    <XStack
-      width={LINK_BLOCK_WIDTH}
-      maxW={LINK_BLOCK_WIDTH}
-      shrink={0}
-      borderWidth={1}
-      borderColor={tamaguiSurfaces.controlBorder}
-      rounded={8}
-      px={7}
-      py={4}
-      gap={5}
-      items="center"
-      overflow="hidden"
-      cursor="pointer"
-      hoverStyle={{ borderColor: borders.strong }}
-      onPress={(event) => {
-        event.stopPropagation();
-        void openExternal(href);
-      }}
-    >
-      <YStack shrink={0}>{icon}</YStack>
-      <Text
-        color={colors.foreground}
-        fontSize={11}
-        fontWeight={400}
-        textDecorationLine="underline"
-        numberOfLines={1}
-        ellipsizeMode="tail"
-        flex={1}
-        minW={0}
-        overflow="hidden"
-      >
-        {label}
-      </Text>
-    </XStack>
-  );
-}
 
 function McpServerCardInner({ entry, onSelect }: McpServerCardProps) {
   const { server } = entry;
@@ -139,17 +76,17 @@ function McpServerCardInner({ entry, onSelect }: McpServerCardProps) {
         {hasLinks ? (
           <XStack gap={8} shrink={0} flexWrap="wrap">
             {websiteUrl ? (
-              <CardLinkBlock
+              <McpLinkBlock
                 href={websiteUrl}
                 icon={<PiGlobeThin size={13} color={colors.muted} />}
-                label={formatLinkLabel(websiteUrl, "Website")}
+                label={formatMcpLinkLabel(websiteUrl, "Website")}
               />
             ) : null}
             {repositoryUrl ? (
-              <CardLinkBlock
+              <McpLinkBlock
                 href={repositoryUrl}
                 icon={<IoLogoGithub size={13} color={colors.muted} />}
-                label={formatLinkLabel(repositoryUrl, "GitHub")}
+                label={formatMcpLinkLabel(repositoryUrl, "GitHub")}
               />
             ) : null}
           </XStack>

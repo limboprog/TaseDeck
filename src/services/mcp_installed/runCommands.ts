@@ -25,6 +25,9 @@ export type RunCommandsState = {
   commands: RunCommandProfile[];
   /** Flags appended to every active command (stdio, HTTP, SSE). */
   sharedArgs: RunCommandArg[];
+  /** When true, `rawCommand` is used instead of the compiled preview. */
+  rawMode?: boolean;
+  rawCommand?: string;
 };
 
 export const RUN_COMMANDS_CONFIG_KEY = "__runCommands";
@@ -126,6 +129,8 @@ export function normalizeRunCommandsState(state: RunCommandsState): RunCommandsS
     activeId: unique.activeId,
     commands,
     sharedArgs: migrateSharedArgs(unique.commands, unique.sharedArgs),
+    rawMode: Boolean(unique.rawMode),
+    rawCommand: unique.rawCommand ?? "",
   };
 }
 
@@ -150,6 +155,8 @@ export function parseRunCommandsState(
       activeId: typeof parsed.activeId === "string" ? parsed.activeId : null,
       commands,
       sharedArgs: Array.isArray(parsed.sharedArgs) ? parsed.sharedArgs : [],
+      rawMode: Boolean(parsed.rawMode),
+      rawCommand: typeof parsed.rawCommand === "string" ? parsed.rawCommand : "",
     });
   } catch {
     return { activeId: null, commands: [], sharedArgs: [] };

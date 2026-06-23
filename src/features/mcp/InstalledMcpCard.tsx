@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { IoChevronDown, IoChevronForward, IoRefresh } from "../../icons";
 import { Button, Input, Text, XStack, YStack } from "tamagui";
 import { McpPanel } from "./McpPanel";
@@ -8,10 +8,9 @@ import {
   getServerConfigValues,
   getServerRunCommands,
   hasPendingRequiredConfig,
-  isMcpServerConfigured,
   resolveServerConfigInputs,
 } from "../../services/mcp_installed/configState";
-import { getMcpTools, stopMcpServer } from "../../services/mcp_installed/toolsApi";
+import { stopMcpServer } from "../../services/mcp_installed/toolsApi";
 import { useMcpToolsSession } from "../../services/mcp_installed/useMcpToolsSession";
 import {
   addInstalledMcpServer,
@@ -21,6 +20,7 @@ import {
 } from "../../services/mcp_installed/api";
 import type { InstalledMcpServer } from "../../services/mcp_installed";
 import { notifyMcpInstalled } from "../../services/mcp_installed/types";
+import { isMaskedSecretSaveError } from "../../services/mcp_installed/secretValues";
 import type { ConfigInput } from "../../services/mcp_registry/parser";
 import { usePanelChrome } from "../../preferences/usePanelChrome";
 import { borders, colors, tamaguiSurfaces } from "../../theme";
@@ -39,6 +39,11 @@ import { McpServerTestSection } from "./McpServerTestSection";
 import { McpToolsList } from "./McpToolsList";
 import { McpOAuthSignInOverlay } from "./McpOAuthSignInOverlay";
 import {
+  disableMcpAuthPrompt,
+  enableMcpAuthPrompt,
+  isMcpAuthPromptEnabled,
+} from "./mcpAuthPromptSession";
+import {
   listenMcpOAuthSignInRequired,
   parseAuthRequiredError,
   type McpAuthChallenge,
@@ -53,7 +58,6 @@ import {
   parseStoredHeaderRows,
   type HeaderVariableRow,
 } from "../../services/mcp_installed/storedHeaders";
-import { openMarketServerDetail } from "../../navigation/appNavigation";
 import {
   findScrollParent,
   preserveScrollWhile,
@@ -67,7 +71,26 @@ type InstalledMcpCardProps = {
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
   isNew?: boolean;
-  onCreated?: () => void;
+  onCreated?: (server: InstalledMcpServer) => void;
+  /** Detail pane: always expanded, no collapse affordance. */
+  detailMode?: boolean;
+  /** Hide title row in detail pane (summary is shown above). */
+  hideTitle?: boolean;
+  /** Parent renders sticky header actions. */
+  externalHeaderActions?: boolean;
+  onDetailActionsChange?: (actions: InstalledMcpDetailActions | null) => void;
+};
+
+export type InstalledMcpDetailActions = {
+  refresh: () => void;
+  deleteServer: () => void;
+  create: () => void;
+  refreshing: boolean;
+  saving: boolean;
+  isNew: boolean;
+  isNaming: boolean;
+  canCreate: boolean;
+  serverName: string;
 };
 
 type NewServerPhase = "naming" | "editing";
@@ -125,6 +148,10 @@ export function InstalledMcpCard({
   onExpandedChange,
   isNew = false,
   onCreated,
+  detailMode = false,
+  hideTitle = false,
+  externalHeaderActions = false,
+  onDetailActionsChange,
 }: InstalledMcpCardProps) {
   const { surfaceStyle, borderColor } = usePanelChrome();
   const opaqueCardSurface = {
@@ -139,19 +166,33 @@ export function InstalledMcpCard({
   const analysisHydratedFor = useRef<number | null>(null);
 
   const [inputsOverride, setInputsOverride] = useState<ConfigInput[] | null>(null);
+  const [localServerPatch, setLocalServerPatch] = useState<InstalledMcpServer | null>(null);
+  const lastFailedAutosaveHashRef = useRef<string | null>(null);
+  const activeServer = localServerPatch ?? server;
   const inputs =
     inputsOverride ??
     analysis?.configInputs ??
     resolveServerConfigInputs(server, analysis ?? undefined);
 
   const baselineValues = useMemo(
-    () => getServerConfigValues(server),
-    [server.id, server.updatedAt, server.configValues, server.jsonConfig],
+    () => getServerConfigValues(activeServer),
+    [activeServer.id, activeServer.updatedAt, activeServer.configValues, activeServer.jsonConfig],
   );
   const baselineRunCommands = useMemo(
-    () => getServerRunCommands(server),
-    [server.id, server.updatedAt, server.configValues, server.jsonConfig, server.runCommand],
+    () => getServerRunCommands(activeServer),
+    [
+      activeServer.id,
+      activeServer.updatedAt,
+      activeServer.configValues,
+      activeServer.jsonConfig,
+      activeServer.runCommand,
+    ],
   );
+
+  useEffect(() => {
+    setLocalServerPatch(null);
+    lastFailedAutosaveHashRef.current = null;
+  }, [server.id, server.updatedAt]);
 
   useEffect(() => {
     analysisHydratedFor.current = null;
@@ -195,6 +236,9 @@ export function InstalledMcpCard({
 
   const [newPhase, setNewPhase] = useState<NewServerPhase>(isNew ? "naming" : "editing");
   const [internalExpanded, setInternalExpanded] = useState(() => {
+    if (detailMode) {
+      return true;
+    }
     if (isNew) {
       return false;
     }
@@ -202,6 +246,8 @@ export function InstalledMcpCard({
   });
   const isExpandedControlled = expandedProp !== undefined;
   const expanded = isExpandedControlled ? expandedProp : internalExpanded;
+  const isNaming = isNew && newPhase === "naming";
+  const showExpandedBody = (detailMode || expanded) && !isNaming;
 
   const setExpanded = (next: boolean | ((value: boolean) => boolean)) => {
     const resolved = typeof next === "function" ? next(expanded) : next;
@@ -220,11 +266,6 @@ export function InstalledMcpCard({
   const nameInputRef = useRef<HTMLInputElement>(null);
   const cardRootRef = useRef<HTMLDivElement>(null);
 
-  const runCommandsDirty = useMemo(
-    () => JSON.stringify(runCommands) !== JSON.stringify(baselineRunCommands),
-    [runCommands, baselineRunCommands],
-  );
-
   const sessionKey = useMemo(() => {
     const profile = getActiveRunCommandProfile(runCommands);
     if (!profile) {
@@ -238,7 +279,7 @@ export function InstalledMcpCard({
     [draftValues, runCommands, server],
   );
 
-  const toolsActive = expanded && canLoadTools;
+  const toolsActive = showExpandedBody && canLoadTools;
 
   const {
     snapshot: toolsSnapshot,
@@ -250,10 +291,11 @@ export function InstalledMcpCard({
 
   const [authChallenge, setAuthChallenge] = useState<McpAuthChallenge | null>(null);
   const [authDismissed, setAuthDismissed] = useState(false);
-  const [lastConnectionError, setLastConnectionError] = useState<string | null>(null);
 
   const showOAuthOverlay =
-    authChallenge?.flow === "oauth" && !authDismissed;
+    authChallenge?.flow === "oauth" &&
+    !authDismissed &&
+    isMcpAuthPromptEnabled(server.id);
 
   const openAuthChallenge = (challenge: McpAuthChallenge) => {
     if (challenge.flow !== "oauth") {
@@ -269,7 +311,9 @@ export function InstalledMcpCard({
     }
     let unlisten: (() => void) | undefined;
     void listenMcpOAuthSignInRequired(server.id, (challenge) => {
-      openAuthChallenge(challenge);
+      if (isMcpAuthPromptEnabled(server.id)) {
+        openAuthChallenge(challenge);
+      }
     }).then((dispose) => {
       unlisten = dispose;
     });
@@ -280,10 +324,15 @@ export function InstalledMcpCard({
 
   useEffect(() => {
     const fromError = parseAuthRequiredError(toolsSnapshot?.error);
-    if (fromError && fromError.flow === "oauth" && !authDismissed) {
+    if (
+      fromError &&
+      fromError.flow === "oauth" &&
+      !authDismissed &&
+      isMcpAuthPromptEnabled(server.id)
+    ) {
       setAuthChallenge(fromError);
     }
-  }, [authDismissed, toolsSnapshot?.error]);
+  }, [authDismissed, server.id, toolsSnapshot?.error]);
 
   useEffect(() => {
     if (!parseAuthRequiredError(toolsSnapshot?.error) && toolsSnapshot?.error == null) {
@@ -292,45 +341,14 @@ export function InstalledMcpCard({
   }, [toolsSnapshot?.error, toolsSnapshot?.tools]);
 
   useEffect(() => {
-    if (server.id <= 0 || !canLoadTools) {
-      setLastConnectionError(null);
+    if (localServerPatch != null) {
       return;
     }
-
-    const applySnapshot = (error: string | null | undefined, toolsCount: number) => {
-      if (error && !parseAuthRequiredError(error)) {
-        setLastConnectionError(error);
-        return;
-      }
-      if (!error && toolsCount > 0) {
-        setLastConnectionError(null);
-      }
-    };
-
-    applySnapshot(toolsSnapshot?.error, toolsSnapshot?.tools.length ?? 0);
-
-    if (toolsSnapshot != null) {
-      return;
-    }
-
-    let cancelled = false;
-    void getMcpTools(server.id).then((snapshot) => {
-      if (cancelled || !snapshot) {
-        return;
-      }
-      applySnapshot(snapshot.error, snapshot.tools.length);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [canLoadTools, server.id, sessionKey, toolsSnapshot]);
-
-  useEffect(() => {
     setDraftName(server.name);
     setDraftValues(baselineValues);
     setRunCommands(baselineRunCommands);
     setInputsOverride(null);
-  }, [baselineRunCommands, baselineValues, server.id, server.name, server.updatedAt]);
+  }, [baselineRunCommands, baselineValues, localServerPatch, server.id, server.name, server.updatedAt]);
 
   useEffect(() => {
     if (isNew && newPhase === "naming") {
@@ -349,9 +367,6 @@ export function InstalledMcpCard({
       setExpanded(true);
     }
   }, [baselineRunCommands, baselineValues, server, isNew]);
-
-  const isNaming = isNew && newPhase === "naming";
-  const showExpandedBody = expanded && !isNaming;
 
   const isDirty = useMemo(() => {
     if (isNew && newPhase === "naming") {
@@ -396,22 +411,6 @@ export function InstalledMcpCard({
     }
   };
 
-  const persistRunCommandsOnly = async (): Promise<InstalledMcpServer | null> => {
-    if (server.id <= 0) {
-      return null;
-    }
-
-    const mergedValues = mergeRunCommandsIntoValues(draftValues, runCommands);
-    const compiledRun = await compileMcpRunCommand(mergedValues);
-    const saved = await updateInstalledMcpServer({
-      ...server,
-      configValues: JSON.stringify(mergedValues),
-      runCommand: compiledRun,
-    });
-    notifyMcpInstalled(saved);
-    return saved;
-  };
-
   const persistServerConfig = async (): Promise<InstalledMcpServer | null> => {
     const trimmedName = draftName.trim();
     if (!trimmedName) {
@@ -434,7 +433,7 @@ export function InstalledMcpCard({
     notifyMcpInstalled(saved);
     setInputsOverride(null);
     if (isNew) {
-      onCreated?.();
+      onCreated?.(saved);
     }
     onUpdated();
     return saved;
@@ -455,11 +454,16 @@ export function InstalledMcpCard({
       setAuthChallenge(null);
       setAuthDismissed(false);
       if (saved.id > 0) {
-        await stopMcpServer(saved.id);
-        await refreshTools();
+        enableMcpAuthPrompt(saved.id);
+        void stopMcpServer(saved.id).then(() => {
+          void refreshTools();
+        });
       }
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (!isMaskedSecretSaveError(message)) {
+        setSaveError(message);
+      }
     } finally {
       setSaving(false);
     }
@@ -470,15 +474,21 @@ export function InstalledMcpCard({
       return;
     }
 
+    enableMcpAuthPrompt(server.id);
+    setAuthDismissed(false);
     setRefreshing(true);
     setSaveError(null);
     try {
-      if (runCommandsDirty) {
-        await persistRunCommandsOnly();
+      if (isDirty) {
+        const currentInputs = inputsOverride ?? inputs;
+        await saveServerDraft(draftValues, currentInputs);
       }
       await refreshTools();
     } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (!isMaskedSecretSaveError(message)) {
+        setSaveError(message);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -489,6 +499,60 @@ export function InstalledMcpCard({
     setDraftValues(merged);
     setInputsOverride(nextInputs);
   };
+
+  const saveServerDraft = useCallback(
+    async (
+      values: Record<string, string>,
+      nextInputs: ConfigInput[],
+      options?: { autosave?: boolean },
+    ): Promise<InstalledMcpServer | null> => {
+      if (server.id <= 0) {
+        return null;
+      }
+
+      if (!options?.autosave) {
+        setSaving(true);
+      }
+      setSaveError(null);
+      try {
+        const mergedValues = mergeRunCommandsIntoValues(values, runCommands);
+        const compiledRun = await compileMcpRunCommand(mergedValues);
+        const built = buildUpdatedMcpServer(activeServer, mergedValues, nextInputs, {
+          runCommand: compiledRun,
+        });
+        const saved = await updateInstalledMcpServer({
+          ...built,
+          name: draftName.trim() || activeServer.name,
+        });
+        setInputsOverride(null);
+
+        if (options?.autosave) {
+          lastFailedAutosaveHashRef.current = null;
+          setLocalServerPatch(saved);
+          return saved;
+        }
+
+        setLocalServerPatch(null);
+        notifyMcpInstalled(saved);
+        onUpdated();
+        return saved;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (!options?.autosave && !isMaskedSecretSaveError(message)) {
+          setSaveError(message);
+        }
+        return null;
+      } finally {
+        if (!options?.autosave) {
+          setSaving(false);
+        }
+      }
+    },
+    [activeServer, draftName, onUpdated, runCommands, server.id],
+  );
+
+  const saveServerDraftRef = useRef(saveServerDraft);
+  saveServerDraftRef.current = saveServerDraft;
 
   const persistEnvChanges = async (
     values: Record<string, string>,
@@ -502,34 +566,61 @@ export function InstalledMcpCard({
       return;
     }
 
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const compiledRun = await compileMcpRunCommand(mergedValues);
-      const built = buildUpdatedMcpServer(server, mergedValues, nextInputs, {
-        runCommand: compiledRun,
-      });
-      const saved = await updateInstalledMcpServer({
-        ...built,
-        name: draftName.trim() || server.name,
-      });
-      notifyMcpInstalled(saved);
-      setInputsOverride(null);
-      onUpdated();
-      if (isMcpServerConfigured(saved)) {
-        void refreshTools();
-      }
-    } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSaving(false);
-    }
+    await saveServerDraft(mergedValues, nextInputs);
   };
 
   const handleRunCommandsChange = (next: RunCommandsState) => {
     setRunCommands(next);
     setDraftValues((current) => mergeRunCommandsIntoValues(current, next));
   };
+
+  const draftAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (isNew || server.id <= 0 || isNaming || !isDirty || saving) {
+      return;
+    }
+
+    const autosaveHash = JSON.stringify({
+      draftName: draftName.trim(),
+      draftValues,
+      runCommands,
+    });
+    if (autosaveHash === lastFailedAutosaveHashRef.current) {
+      return;
+    }
+
+    if (draftAutosaveTimerRef.current) {
+      clearTimeout(draftAutosaveTimerRef.current);
+    }
+
+    draftAutosaveTimerRef.current = setTimeout(() => {
+      draftAutosaveTimerRef.current = null;
+      const currentInputs = inputsOverride ?? inputs;
+      void saveServerDraftRef.current(draftValues, currentInputs, { autosave: true }).then((saved) => {
+        if (!saved) {
+          lastFailedAutosaveHashRef.current = autosaveHash;
+        }
+      });
+    }, 500);
+
+    return () => {
+      if (draftAutosaveTimerRef.current) {
+        clearTimeout(draftAutosaveTimerRef.current);
+      }
+    };
+  }, [
+    draftName,
+    draftValues,
+    inputs,
+    inputsOverride,
+    isDirty,
+    isNaming,
+    isNew,
+    runCommands,
+    saving,
+    server.id,
+  ]);
 
   const headerRows = useMemo(
     () => parseStoredHeaderRows(draftValues),
@@ -552,14 +643,6 @@ export function InstalledMcpCard({
     });
   };
 
-  const showConnectionFailed =
-    server.id > 0 &&
-    canLoadTools &&
-    !toolsLoading &&
-    !showOAuthOverlay &&
-    !parseAuthRequiredError(toolsSnapshot?.error) &&
-    Boolean(lastConnectionError);
-
   const handleDelete = async () => {
     if (isNew || server.id <= 0) {
       return;
@@ -578,13 +661,52 @@ export function InstalledMcpCard({
     }
   };
 
+  useEffect(() => {
+    if (!detailMode || !externalHeaderActions || !onDetailActionsChange) {
+      return;
+    }
+
+    onDetailActionsChange({
+      refresh: () => {
+        void handleRefresh();
+      },
+      deleteServer: () => {
+        void handleDelete();
+      },
+      create: () => {
+        void handleCreate();
+      },
+      refreshing,
+      saving,
+      isNew,
+      isNaming,
+      canCreate: isNew && isDirty && !saving && !isNaming,
+      serverName: draftName.trim() || server.name,
+    });
+
+    return () => {
+      onDetailActionsChange(null);
+    };
+  }, [
+    detailMode,
+    draftName,
+    externalHeaderActions,
+    isDirty,
+    isNaming,
+    isNew,
+    onDetailActionsChange,
+    refreshing,
+    saving,
+    server.name,
+  ]);
+
   const headerRow = (
       <div
-        role={isNaming ? undefined : "button"}
-        tabIndex={isNaming ? -1 : 0}
-        onClick={toggleExpanded}
+        role={detailMode || isNaming ? undefined : "button"}
+        tabIndex={detailMode || isNaming ? -1 : 0}
+        onClick={detailMode ? undefined : toggleExpanded}
         onKeyDown={(event) => {
-          if (isNaming) {
+          if (detailMode || isNaming) {
             return;
           }
           if (event.key === "Enter" || event.key === " ") {
@@ -597,26 +719,28 @@ export function InstalledMcpCard({
           alignItems: "center",
           gap: 8,
           padding: "10px 12px",
-          cursor: isNaming ? "default" : "pointer",
+          cursor: detailMode || isNaming ? "default" : "pointer",
           userSelect: "none",
         }}
       >
-        <div
-          style={{
-            color: colors.muted,
-            flexShrink: 0,
-            display: "flex",
-            opacity: isNaming ? 0.35 : 1,
-            pointerEvents: isNaming ? "none" : "auto",
-          }}
-          aria-hidden={isNaming}
-        >
-          {expanded && !isNaming ? (
-            <IoChevronDown size={15} />
-          ) : (
-            <IoChevronForward size={15} />
-          )}
-        </div>
+        {!detailMode ? (
+          <div
+            style={{
+              color: colors.muted,
+              flexShrink: 0,
+              display: "flex",
+              opacity: isNaming ? 0.35 : 1,
+              pointerEvents: isNaming ? "none" : "auto",
+            }}
+            aria-hidden={isNaming}
+          >
+            {expanded && !isNaming ? (
+              <IoChevronDown size={15} />
+            ) : (
+              <IoChevronForward size={15} />
+            )}
+          </div>
+        ) : null}
 
         {isNaming ? (
           <div
@@ -653,7 +777,7 @@ export function InstalledMcpCard({
               }}
             />
           </div>
-        ) : (
+        ) : hideTitle ? null : (
           <div
             style={{
               flex: 1,
@@ -735,44 +859,12 @@ export function InstalledMcpCard({
 
   const expandedBody = showExpandedBody ? (
         <YStack
-          px={12}
-          pb={12}
-          pt={2}
+          px={detailMode ? 0 : 12}
+          pb={detailMode ? 0 : 12}
+          pt={detailMode ? 0 : 2}
           gap={16}
           onClick={(event) => event.stopPropagation()}
         >
-          {showConnectionFailed ? (
-            <XStack gap={8} items="center" flexWrap="wrap">
-              <Text color={colors.warning} fontSize={13} fontWeight="500" select="none">
-                Connection failed.
-              </Text>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openMarketServerDetail(server);
-                }}
-                onMouseEnter={(event) => {
-                  event.currentTarget.style.opacity = "0.85";
-                }}
-                onMouseLeave={(event) => {
-                  event.currentTarget.style.opacity = "1";
-                }}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  color: colors.accent,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  padding: 0,
-                  fontFamily: "inherit",
-                }}
-              >
-                Read more
-              </button>
-            </XStack>
-          ) : null}
           <McpRunCommandsSection
             state={runCommands}
             env={draftValues}
@@ -820,6 +912,7 @@ export function InstalledMcpCard({
                 }
                 toolEnabled={toolEnabled}
                 onToggleTool={toggleTool}
+                showToggles={!isNew}
               />
               <McpServerTestSection
                 serverId={server.id}
@@ -836,18 +929,74 @@ export function InstalledMcpCard({
             </Text>
           ) : null}
 
-          {missingRequired ? (
-            <Text color={colors.muted} fontSize={11} select="none">
-              Fill required fields to use this server on the workspace graph.
-        </Text>
-          ) : null}
-
       </YStack>
   ) : null;
 
+  const showDetailActions = detailMode && !externalHeaderActions;
+  const detailActionRow =
+    showDetailActions && !isNaming ? (
+      <XStack width="100%" justify="flex-end" items="center" gap={4} pb={4}>
+        {isNew ? (
+          <Button
+            size="$2"
+            height={26}
+            px={10}
+            rounded={6}
+            disabled={!isDirty || saving}
+            opacity={isDirty ? 1 : 0.35}
+            bg={isDirty ? colors.accent : tamaguiSurfaces.controlHoverBg}
+            color={isDirty ? "#fff" : colors.muted}
+            fontSize={11}
+            onPress={() => {
+              void handleCreate();
+            }}
+          >
+            {saving ? "…" : "Create"}
+          </Button>
+        ) : (
+          <>
+            <Button
+              unstyled
+              width={30}
+              height={30}
+              rounded={8}
+              hoverStyle={{ bg: tamaguiSurfaces.activeBg }}
+              disabled={refreshing || saving}
+              opacity={refreshing || saving ? 0.45 : 1}
+              onPress={() => {
+                void handleRefresh();
+              }}
+              aria-label="Refresh server"
+            >
+              <XStack flex={1} items="center" justify="center" style={{ color: colors.muted }}>
+                <IoRefresh size={16} />
+              </XStack>
+            </Button>
+            {server.id > 0 ? (
+              <McpRemoveButton
+                ariaLabel={`Delete ${draftName.trim() || server.name}`}
+                onClick={() => {
+                  void handleDelete();
+                }}
+              />
+            ) : null}
+          </>
+        )}
+      </XStack>
+    ) : null;
+
   return (
     <div ref={cardRootRef} style={{ width: "100%" }}>
-      {showExpandedBody ? (
+      {detailMode && showExpandedBody ? (
+        <YStack gap={16} width="100%">
+          {isNaming ? (
+            <div style={{ padding: 0 }}>{headerRow}</div>
+          ) : (
+            detailActionRow
+          )}
+          {expandedBody}
+        </YStack>
+      ) : showExpandedBody ? (
         <McpPanel
           p={0}
           clip={false}
@@ -880,10 +1029,12 @@ export function InstalledMcpCard({
           onClose={() => {
             setAuthDismissed(true);
             setAuthChallenge(null);
+            disableMcpAuthPrompt(server.id);
           }}
           onAuthenticated={() => {
             setAuthDismissed(false);
             setAuthChallenge(null);
+            disableMcpAuthPrompt(server.id);
             void refreshTools();
           }}
         />

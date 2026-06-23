@@ -7,6 +7,7 @@
  *   TASEDECK_BRIDGE_HOST (default 127.0.0.1)
  *   TASEDECK_BRIDGE_PORT (required)
  *   TASEDECK_TOPOLOGY_ID   (optional, for logs)
+ *   TASEDECK_CALLER        (optional, usage log label — e.g. "user" for manual tests)
  */
 
 import net from "node:net";
@@ -20,6 +21,7 @@ const PROTOCOL_VERSION = "2024-11-05";
 const BRIDGE_HOST = process.env.TASEDECK_BRIDGE_HOST ?? "127.0.0.1";
 const BRIDGE_PORT = Number(process.env.TASEDECK_BRIDGE_PORT ?? "0");
 const TOPOLOGY_ID = process.env.TASEDECK_TOPOLOGY_ID ?? "";
+const BRIDGE_CALLER = process.env.TASEDECK_CALLER?.trim() ?? "";
 
 /** @type {Map<string, { description: string, inputSchema: object }>} */
 const TOOLS = new Map([
@@ -164,6 +166,7 @@ async function handleToolsCall(name, args) {
         serverId,
         name: toolName,
         arguments: toolArgs,
+        caller: BRIDGE_CALLER || undefined,
       });
       const text =
         result?.result?.content?.[0]?.text ??

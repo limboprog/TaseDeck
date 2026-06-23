@@ -2,30 +2,44 @@ import { listen } from "@tauri-apps/api/event";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { Button, Text, XStack, YStack } from "tamagui";
 import { InlineLoader } from "../../components/InlineLoader";
+import { PaneExpandableText, PaneView } from "../../components/pane";
+import type { TablePickerOption } from "../../components/TablePicker";
+import { listAgentRecords } from "../../services/agents/recordsApi";
+import { useInstalledMcpServers } from "../../services/mcp_installed";
 import { listUsageEntries, type UsageLogEntry } from "../../services/usage/usageApi";
 import { borders, colors, tamaguiSurfaces } from "../../theme";
-import { formatUsageDate } from "./formatUsageDate";
+import { pageContentInsets } from "../../styles/layout";
+import {
+  formatUsageCaller,
+  formatUsageDate,
+  formatUsageToolLabel,
+  normalizeUsageCaller,
+  USER_CALLER_VALUE,
+} from "./formatUsageDate";
 import { McpPanel } from "../mcp/McpPanel";
+import { mcpTablePanelBodyText } from "../mcp/mcpTableStyles";
 import { McpDataTable, McpTableRow } from "../mcp/table/McpDataTable";
 import {
   McpTableCell,
   McpTableCopyAction,
-  McpTableEllipsisText,
   McpTableEmptyRow,
   McpTableFirstLine,
   McpTablePlainText,
 } from "../mcp/table/McpTableCells";
+import { UsageFilterBar } from "./UsageFilterBar";
 
 const PAGE_SIZE = 30;
 
 const USAGE_GRID =
-  "minmax(132px, max-content) minmax(0, 1fr) minmax(0, 0.8fr) minmax(92px, max-content) minmax(160px, 2.4fr)";
+  "minmax(140px, max-content) minmax(120px, max-content) minmax(104px, max-content) minmax(132px, max-content) minmax(72px, max-content) minmax(136px, 2fr)";
+const COL_PAD = 16;
 const STATUS_RESULT_GAP = 48;
 const RESULT_CELL_PAD_LEFT = 20;
 const RESULT_COPY_SLOT = 30;
@@ -40,19 +54,68 @@ function statusLabel(success: boolean) {
 }
 
 function statusColor(success: boolean) {
-  return success ? colors.success : colors.error;
+  return success ? "#2F9E62" : colors.errorSoft;
+}
+
+function matchesCallerFilter(entry: UsageLogEntry, selectedCallers: string[]) {
+  if (selectedCallers.length === 0) {
+    return true;
+  }
+  const caller = normalizeUsageCaller(entry.caller);
+  return selectedCallers.some((value) => value.toLowerCase() === caller);
+}
+
+function matchesMcpFilter(entry: UsageLogEntry, selectedMcps: string[]) {
+  if (selectedMcps.length === 0) {
+    return true;
+  }
+  const mcpName = entry.mcpName.trim().toLowerCase();
+  return selectedMcps.some((value) => value.toLowerCase() === mcpName);
 }
 
 export function UsagePage({ usageActive = true }: UsagePageProps) {
   const tableRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevExpandedRowIdRef = useRef<string | null>(null);
+  const { servers: installedMcps } = useInstalledMcpServers();
   const [entries, setEntries] = useState<UsageLogEntry[]>([]);
+  const [agents, setAgents] = useState<TablePickerOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const [selectedCallers, setSelectedCallers] = useState<string[]>([]);
+  const [selectedMcps, setSelectedMcps] = useState<string[]>([]);
+
+  const callerOptions = useMemo<TablePickerOption[]>(
+    () => [
+      { value: USER_CALLER_VALUE, label: "User" },
+      ...agents.map((agent) => ({ value: agent.value, label: agent.label })),
+    ],
+    [agents],
+  );
+
+  const mcpOptions = useMemo<TablePickerOption[]>(
+    () =>
+      installedMcps
+        .filter((server) => server.id > 0)
+        .map((server) => ({
+          value: server.name,
+          label: server.name,
+        })),
+    [installedMcps],
+  );
+
+  const filteredEntries = useMemo(
+    () =>
+      entries.filter(
+        (entry) =>
+          matchesCallerFilter(entry, selectedCallers) &&
+          matchesMcpFilter(entry, selectedMcps),
+      ),
+    [entries, selectedCallers, selectedMcps],
+  );
 
   const toggleRow = useCallback((rowId: string) => {
     setExpandedRowId((current) => (current === rowId ? null : rowId));
@@ -126,12 +189,15 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
     prevExpandedRowIdRef.current = expandedRowId;
   }, [expandedRowId, usageActive]);
 
-  const total = entries.length;
+  const total = filteredEntries.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageStart = total === 0 ? 0 : safePage * PAGE_SIZE + 1;
   const pageEnd = Math.min(total, (safePage + 1) * PAGE_SIZE);
-  const pageEntries = entries.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const pageEntries = filteredEntries.slice(
+    safePage * PAGE_SIZE,
+    safePage * PAGE_SIZE + PAGE_SIZE,
+  );
 
   const loadEntries = useCallback(async () => {
     try {
@@ -142,6 +208,20 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const loadAgents = useCallback(async () => {
+    try {
+      const records = await listAgentRecords();
+      setAgents(
+        records.map((agent) => ({
+          value: agent.name,
+          label: agent.name,
+        })),
+      );
+    } catch {
+      setAgents([]);
     }
   }, []);
 
@@ -159,12 +239,18 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
   }, [safePage]);
 
   useEffect(() => {
+    setPage(0);
+    setExpandedRowId(null);
+  }, [selectedCallers, selectedMcps]);
+
+  useEffect(() => {
     if (!usageActive) {
       return;
     }
     setLoading(true);
     void loadEntries();
-  }, [loadEntries, usageActive]);
+    void loadAgents();
+  }, [loadAgents, loadEntries, usageActive]);
 
   useEffect(() => {
     if (!usageActive) {
@@ -198,6 +284,34 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
     }
   }, []);
 
+  const addCaller = useCallback((value: string) => {
+    setSelectedCallers((current) =>
+      current.some((entry) => entry.toLowerCase() === value.toLowerCase())
+        ? current
+        : [...current, value],
+    );
+  }, []);
+
+  const removeCaller = useCallback((value: string) => {
+    setSelectedCallers((current) =>
+      current.filter((entry) => entry.toLowerCase() !== value.toLowerCase()),
+    );
+  }, []);
+
+  const addMcp = useCallback((value: string) => {
+    setSelectedMcps((current) =>
+      current.some((entry) => entry.toLowerCase() === value.toLowerCase())
+        ? current
+        : [...current, value],
+    );
+  }, []);
+
+  const removeMcp = useCallback((value: string) => {
+    setSelectedMcps((current) =>
+      current.filter((entry) => entry.toLowerCase() !== value.toLowerCase()),
+    );
+  }, []);
+
   if (loading && entries.length === 0) {
     return (
       <YStack flex={1} justify="center" items="center" px={12}>
@@ -206,12 +320,29 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
     );
   }
 
-  return (
-    <YStack flex={1} minH={0} overflow="hidden" px={16} py={14} gap={12}>
-      <Text color={colors.foreground} fontSize={22} fontWeight="700" select="none">
-        Usage
-      </Text>
+  const emptyMessage =
+    entries.length === 0
+      ? "No agent tool calls yet. Run a topology and invoke an MCP tool from your agent."
+      : "No entries match the selected filters.";
 
+  return (
+    <PaneView
+      flex={1}
+      {...pageContentInsets}
+      gap={12}
+      toolbar={
+        <UsageFilterBar
+          callerOptions={callerOptions}
+          mcpOptions={mcpOptions}
+          selectedCallers={selectedCallers}
+          selectedMcps={selectedMcps}
+          onAddCaller={addCaller}
+          onRemoveCaller={removeCaller}
+          onAddMcp={addMcp}
+          onRemoveMcp={removeMcp}
+        />
+      }
+    >
       {error ? (
         <Text color={colors.error} fontSize={12} shrink={0}>
           {error}
@@ -225,35 +356,40 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
           style={{
             flex: 1,
             minHeight: 0,
-            padding: 16,
             boxSizing: "border-box",
           }}
         >
           <div ref={tableRef} onMouseDown={handleTableMouseDown} style={{ width: "100%" }}>
           <McpDataTable
+            bare
             shellStyle={{ width: "100%" }}
             gridColumns={USAGE_GRID}
             columns={[
-              { key: "date", header: "Date", headerStyle: { paddingRight: 16 } },
-              { key: "mcp", header: "MCP", headerStyle: { paddingRight: 20 } },
-              { key: "tool", header: "Tool", headerStyle: { paddingRight: 20 } },
+              { key: "date", header: "Date", headerStyle: { paddingRight: COL_PAD } },
+              { key: "mcp", header: "MCP", headerStyle: { paddingRight: COL_PAD } },
+              { key: "caller", header: "Caller", headerStyle: { paddingRight: COL_PAD } },
+              {
+                key: "tool",
+                header: "Tool",
+                headerStyle: { paddingRight: STATUS_RESULT_GAP },
+              },
               {
                 key: "status",
                 header: "Status",
-                headerStyle: { paddingRight: STATUS_RESULT_GAP },
+                headerStyle: { paddingRight: COL_PAD },
               },
               {
                 key: "result",
                 header: "Result",
                 headerStyle: {
                   paddingLeft: RESULT_CELL_PAD_LEFT,
-                  paddingRight: 12 + RESULT_COPY_SLOT,
+                  paddingRight: COL_PAD + RESULT_COPY_SLOT,
                 },
               },
             ]}
             empty={
-              entries.length === 0 ? (
-                <McpTableEmptyRow message="No MCP tool calls yet. Run a topology, probe an MCP server, or use simulate-agent." />
+              filteredEntries.length === 0 ? (
+                <McpTableEmptyRow message={emptyMessage} />
               ) : undefined
             }
           >
@@ -267,7 +403,7 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                   <McpTableCell
                     isLastRow={isLastRow}
                     isRowExpanded={isExpanded}
-                    style={{ paddingRight: 16 }}
+                    style={{ paddingRight: COL_PAD }}
                   >
                     <div
                       data-usage-row-id={rowId}
@@ -276,23 +412,20 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                     >
                       <McpTablePlainText
                         value={formatUsageDate(entry.createdAt)}
-                        fontSize={12}
-                        fontWeight={400}
+                        tone="panel"
                         isRowExpanded={isExpanded}
-                        monospace
                       />
                     </div>
                   </McpTableCell>
                   <McpTableCell
                     isLastRow={isLastRow}
                     isRowExpanded={isExpanded}
-                    style={{ paddingRight: 20 }}
+                    style={{ paddingRight: COL_PAD, minWidth: 0 }}
                   >
-                    <div data-usage-row-id={rowId} style={{ width: "100%" }}>
+                    <div data-usage-row-id={rowId} style={{ width: "100%", minWidth: 0 }}>
                       <McpTablePlainText
                         value={entry.mcpName}
-                        fontSize={13}
-                        fontWeight={400}
+                        tone="panel"
                         isRowExpanded={isExpanded}
                       />
                     </div>
@@ -300,13 +433,12 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                   <McpTableCell
                     isLastRow={isLastRow}
                     isRowExpanded={isExpanded}
-                    style={{ paddingRight: 20 }}
+                    style={{ paddingRight: COL_PAD, minWidth: 0 }}
                   >
-                    <div data-usage-row-id={rowId} style={{ width: "100%" }}>
+                    <div data-usage-row-id={rowId} style={{ width: "100%", minWidth: 0 }}>
                       <McpTablePlainText
-                        value={entry.toolName}
-                        fontSize={13}
-                        fontWeight={400}
+                        value={formatUsageCaller(entry.caller)}
+                        tone="panel"
                         isRowExpanded={isExpanded}
                       />
                     </div>
@@ -314,15 +446,27 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                   <McpTableCell
                     isLastRow={isLastRow}
                     isRowExpanded={isExpanded}
-                    style={{ paddingRight: STATUS_RESULT_GAP }}
+                    style={{ paddingRight: STATUS_RESULT_GAP, minWidth: 0 }}
+                  >
+                    <div data-usage-row-id={rowId} style={{ width: "100%", minWidth: 0 }}>
+                      <McpTablePlainText
+                        value={formatUsageToolLabel(entry.toolName)}
+                        tone="panel"
+                        isRowExpanded={isExpanded}
+                      />
+                    </div>
+                  </McpTableCell>
+                  <McpTableCell
+                    isLastRow={isLastRow}
+                    isRowExpanded={isExpanded}
+                    style={{ paddingRight: COL_PAD }}
                   >
                     <div data-usage-row-id={rowId} style={{ width: "100%" }}>
                       <McpTableFirstLine>
                         <span
                           style={{
+                            ...mcpTablePanelBodyText,
                             color: statusColor(entry.success),
-                            fontSize: 12,
-                            fontWeight: 400,
                             whiteSpace: "nowrap",
                           }}
                         >
@@ -336,7 +480,7 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                     isRowExpanded={isExpanded}
                     style={{
                       paddingLeft: RESULT_CELL_PAD_LEFT,
-                      paddingRight: 12,
+                      paddingRight: COL_PAD,
                       minWidth: 0,
                       overflow: "hidden",
                     }}
@@ -366,11 +510,13 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                             }
                           }}
                         >
-                          <McpTableEllipsisText
+                          <PaneExpandableText
                             value={entry.result}
-                            isRowExpanded={isExpanded}
-                            fontSize={11}
+                            expanded={isExpanded}
+                            color={colors.panelForeground}
+                            fontSize={12}
                             monospace
+                            maxHeight={EXPANDED_RESULT_MAX_HEIGHT}
                           />
                         </div>
                         <div style={{ flexShrink: 0, marginTop: 2 }}>
@@ -381,7 +527,7 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
                         </div>
                       </div>
                     ) : (
-                      <span style={{ color: colors.muted, fontSize: 12 }}>—</span>
+                      <span style={{ color: colors.muted, fontSize: 13 }}>—</span>
                     )}
                   </McpTableCell>
                 </McpTableRow>
@@ -393,7 +539,7 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
 
         {total > 0 ? (
           <XStack
-            px={16}
+            px={12}
             py={10}
             items="center"
             justify="space-between"
@@ -446,6 +592,6 @@ export function UsagePage({ usageActive = true }: UsagePageProps) {
           </XStack>
         ) : null}
       </McpPanel>
-    </YStack>
+    </PaneView>
   );
 }

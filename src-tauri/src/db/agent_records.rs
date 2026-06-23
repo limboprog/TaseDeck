@@ -109,7 +109,7 @@ fn fetch_agent_record(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<
     stmt.query_row(params![id], map_agent_row).optional()
 }
 
-fn map_agent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRecord> {
+pub(crate) fn map_agent_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRecord> {
     Ok(AgentRecord {
         id: row.get(0)?,
         name: row.get(1)?,

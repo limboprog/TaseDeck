@@ -42,6 +42,7 @@ sha2 = "0.10"
 urlencoding = "2"
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+toml = "0.8"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }

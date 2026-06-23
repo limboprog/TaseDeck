@@ -3,8 +3,9 @@ import {
   createTopology,
   getStoredTopologies,
   saveTopologies,
+  TOPOLOGIES_CHANGED_EVENT,
 } from "./storage";
-import { getTopologyRunStatus, startTopology, stopTopology } from "./topologyRunApi";
+import { getTopologyRunStatus, notifyTopologyRunChanged, startTopology, stopTopology } from "./topologyRunApi";
 import type { Topology } from "./types";
 
 export function useTopologies() {
@@ -18,6 +19,14 @@ export function useTopologies() {
     }, 400);
     return () => window.clearTimeout(timer);
   }, [topologies]);
+
+  useEffect(() => {
+    const onChanged = () => {
+      setTopologies(getStoredTopologies());
+    };
+    window.addEventListener(TOPOLOGIES_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(TOPOLOGIES_CHANGED_EVENT, onChanged);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,19 +115,23 @@ export function useTopologies() {
         ? startTopology(id, topology.name)
         : stopTopology(id, topology.name);
 
-      void action.catch(() => {
-        setTopologies((latest) =>
-          latest.map((entry) =>
-            entry.id === id
-              ? {
-                  ...entry,
-                  running: !willRun,
-                  updatedAt: new Date().toISOString(),
-                }
-              : entry,
-          ),
-        );
-      });
+      void action
+        .then(() => {
+          notifyTopologyRunChanged();
+        })
+        .catch(() => {
+          setTopologies((latest) =>
+            latest.map((entry) =>
+              entry.id === id
+                ? {
+                    ...entry,
+                    running: !willRun,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : entry,
+            ),
+          );
+        });
 
       return next;
     });

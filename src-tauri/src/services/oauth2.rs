@@ -26,13 +26,23 @@ const OAUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 const OAUTH_SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 const OAUTH_CALLBACK_HOST: &str = "127.0.0.1";
 const OAUTH_CALLBACK_PATH: &str = "/oauth/callback";
+const OAUTH_CALLBACK_PATH_ALT: &str = "/callback";
 const AUTH_REQUIRED_PREFIX: &str = "MCP_AUTH_REQUIRED:";
 pub const MCP_OAUTH_SIGN_IN_EVENT: &str = "mcp-oauth-sign-in-required";
 pub const MCP_OAUTH_SIGN_IN_COMPLETE_EVENT: &str = "mcp-oauth-sign-in-complete";
 pub const TASEDECK_DEEP_LINK_OPEN: &str = "tasedeck://oauth/complete";
 
+fn oauth_redirect_uris(port: u16) -> Vec<String> {
+    vec![format!(
+        "http://{OAUTH_CALLBACK_HOST}:{port}{OAUTH_CALLBACK_PATH}"
+    )]
+}
+
 fn oauth_redirect_uri(port: u16) -> String {
-    format!("http://{OAUTH_CALLBACK_HOST}:{port}{OAUTH_CALLBACK_PATH}")
+    oauth_redirect_uris(port)
+        .into_iter()
+        .next()
+        .expect("redirect uri list is never empty")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +83,8 @@ struct PendingOAuthFlow {
     code_verifier: String,
     client_id: String,
     redirect_uri: String,
+    resource: String,
+    oauth_state: String,
     resource_metadata_url: Option<String>,
 }
 
@@ -241,7 +253,16 @@ impl OAuthStore {
         }
 
         if let Some(resource_metadata_url) = parse_resource_metadata_url(www_auth.as_deref()) {
-            let challenge = self.begin_oauth_flow(server, endpoint, &resource_metadata_url)?;
+            let scope_hint = parse_www_authenticate_scope(www_auth.as_deref());
+            let challenge =
+                self.begin_oauth_flow(server, endpoint, &resource_metadata_url, scope_hint.as_deref())?;
+            self.emit_sign_in(&challenge);
+            return Ok(AuthAction::SignInRequired(challenge));
+        }
+
+        let scope_hint = parse_www_authenticate_scope(www_auth.as_deref());
+        if let Ok(challenge) = self.begin_oauth_flow_from_endpoint(server, endpoint, scope_hint.as_deref())
+        {
             self.emit_sign_in(&challenge);
             return Ok(AuthAction::SignInRequired(challenge));
         }
@@ -269,56 +290,145 @@ impl OAuthStore {
         server: &McpServer,
         endpoint: &str,
         resource_metadata_url: &str,
+        scope_hint: Option<&str>,
     ) -> AppResult<McpAuthChallenge> {
         let prm: ProtectedResourceMetadata = self
             .client
             .get(resource_metadata_url)
+            .header("Accept", "application/json")
             .send()
             .map_err(|error| AppError::Message(format!("failed to fetch resource metadata: {error}")))?
+            .error_for_status()
+            .map_err(|error| {
+                AppError::Message(format!(
+                    "resource metadata request failed for {resource_metadata_url}: {error}"
+                ))
+            })?
             .json()
             .map_err(|error| AppError::Message(format!("invalid resource metadata JSON: {error}")))?;
 
-        let issuer = prm
-            .authorization_servers
-            .first()
-            .ok_or_else(|| AppError::Message("resource metadata has no authorization_servers".to_string()))?
-            .trim()
-            .trim_end_matches('/')
-            .to_string();
+        let issuers = resolve_authorization_server_issuers(&prm);
+        if issuers.is_empty() {
+            return Err(AppError::Message(
+                "resource metadata has no authorization_servers".to_string(),
+            ));
+        }
 
-        let as_metadata = discover_authorization_server(&self.client, &issuer)?;
-        let redirect_uri = self.oauth_redirect_uri()?;
-        let client_id = register_or_default_client(&self.client, &as_metadata, &redirect_uri)?;
+        let port = self.bound_callback_port().ok_or_else(|| {
+            AppError::Message(
+                "OAuth callback server is not running; restart the application".to_string(),
+            )
+        })?;
+        let redirect_uri = oauth_redirect_uri(port);
+        let redirect_uris = oauth_redirect_uris(port);
+
+        let mut last_error = None;
+        for issuer in issuers {
+            match discover_authorization_server(&self.client, &issuer) {
+                Ok(as_metadata) => {
+                    match self.build_oauth_challenge(
+                        server,
+                        endpoint,
+                        &prm,
+                        &as_metadata,
+                        &issuer,
+                        &redirect_uri,
+                        &redirect_uris,
+                        resource_metadata_url,
+                        scope_hint,
+                    ) {
+                        Ok(challenge) => return Ok(challenge),
+                        Err(error) => last_error = Some(error.to_string()),
+                    }
+                }
+                Err(error) => last_error = Some(error.to_string()),
+            }
+        }
+
+        Err(AppError::Message(
+            last_error.unwrap_or_else(|| "OAuth authorization server discovery failed".to_string()),
+        ))
+    }
+
+    fn begin_oauth_flow_from_endpoint(
+        &self,
+        server: &McpServer,
+        endpoint: &str,
+        scope_hint: Option<&str>,
+    ) -> AppResult<McpAuthChallenge> {
+        let mut last_error = None;
+        for resource_metadata_url in prm_well_known_candidates(endpoint) {
+            match self.begin_oauth_flow(
+                server,
+                endpoint,
+                &resource_metadata_url,
+                scope_hint,
+            ) {
+                Ok(challenge) => return Ok(challenge),
+                Err(error) => last_error = Some(error.to_string()),
+            }
+        }
+        Err(AppError::Message(
+            last_error.unwrap_or_else(|| "could not discover OAuth resource metadata".to_string()),
+        ))
+    }
+
+    fn build_oauth_challenge(
+        &self,
+        server: &McpServer,
+        endpoint: &str,
+        prm: &ProtectedResourceMetadata,
+        as_metadata: &AuthorizationServerMetadata,
+        issuer: &str,
+        redirect_uri: &str,
+        redirect_uris: &[String],
+        resource_metadata_url: &str,
+        scope_hint: Option<&str>,
+    ) -> AppResult<McpAuthChallenge> {
+        let client_id = resolve_oauth_client_id(&self.client, as_metadata, redirect_uris)?;
 
         let code_verifier = generate_code_verifier();
         let code_challenge = code_challenge_s256(&code_verifier);
-        let mut auth_url = Url::parse(&as_metadata.authorization_endpoint).map_err(|error| {
+        let resource = resolve_resource_uri(prm, endpoint);
+        let oauth_state = build_oauth_state(server.id);
+        let authorization_endpoint =
+            resolve_endpoint_url(issuer, &as_metadata.authorization_endpoint)?;
+        let token_endpoint = resolve_endpoint_url(issuer, &as_metadata.token_endpoint)?;
+        let mut auth_url = Url::parse(&authorization_endpoint).map_err(|error| {
             AppError::Message(format!("invalid authorization endpoint: {error}"))
         })?;
         {
             let mut pairs = auth_url.query_pairs_mut();
             pairs.append_pair("response_type", "code");
             pairs.append_pair("client_id", &client_id);
-            pairs.append_pair("redirect_uri", &redirect_uri);
+            pairs.append_pair("redirect_uri", redirect_uri);
             pairs.append_pair("code_challenge", &code_challenge);
             pairs.append_pair("code_challenge_method", "S256");
-            pairs.append_pair("state", &server.id.to_string());
-            if let Some(scope) = prm.scopes_supported.as_ref().and_then(|s| s.first()) {
-                pairs.append_pair("scope", scope);
-            }
-            if let Some(resource) = prm.resource.as_deref() {
-                pairs.append_pair("resource", resource);
-            } else {
-                pairs.append_pair("resource", endpoint);
+            pairs.append_pair("state", &oauth_state);
+            pairs.append_pair("resource", &resource);
+            if let Some(scope) = scope_hint
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| resolve_oauth_scope(prm))
+            {
+                pairs.append_pair("scope", &scope);
             }
         }
 
+        let authorization_url = auth_url.to_string();
+        eprintln!(
+            "[oauth] server={} issuer={} auth_url={}",
+            server.id, issuer, authorization_url
+        );
+
         let pending = PendingOAuthFlow {
-            authorization_url: auth_url.to_string(),
-            token_endpoint: as_metadata.token_endpoint,
+            authorization_url: authorization_url.clone(),
+            token_endpoint,
             code_verifier,
             client_id,
-            redirect_uri,
+            redirect_uri: redirect_uri.to_string(),
+            resource,
+            oauth_state,
             resource_metadata_url: Some(resource_metadata_url.to_string()),
         };
 
@@ -331,9 +441,79 @@ impl OAuthStore {
             server_name: server.name.clone(),
             endpoint: endpoint.to_string(),
             flow: "oauth".to_string(),
-            authorization_url: Some(auth_url.to_string()),
+            authorization_url: Some(authorization_url),
             resource_metadata_url: Some(resource_metadata_url.to_string()),
         })
+    }
+
+    fn ensure_oauth_flow_prepared(&self, server_id: i64) -> AppResult<()> {
+        let db = self.database();
+        let server = db
+            .get_mcp_server(server_id)?
+            .ok_or_else(|| AppError::Message("MCP server not found".to_string()))?;
+        let endpoint = server_endpoint(&server)?;
+        let resource_metadata_url = self.discover_resource_metadata_url(server_id, &endpoint)?;
+        let _ = self.begin_oauth_flow(&server, &endpoint, &resource_metadata_url, None)?;
+        Ok(())
+    }
+
+    fn discover_resource_metadata_url(&self, server_id: i64, endpoint: &str) -> AppResult<String> {
+        if let Ok(pending) = self.pending.lock() {
+            if let Some(url) = pending
+                .get(&server_id)
+                .and_then(|flow| flow.resource_metadata_url.clone())
+            {
+                return Ok(url);
+            }
+        }
+
+        let initialize_body = json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "tase-deck",
+                    "version": "0.1.0"
+                }
+            },
+            "id": 1
+        });
+
+        if let Ok(response) = self
+            .client
+            .post(endpoint)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&initialize_body)
+            .send()
+        {
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                if let Some(url) =
+                    parse_resource_metadata_url(read_www_authenticate(response.headers()).as_deref())
+                {
+                    return Ok(url);
+                }
+            }
+        }
+
+        for candidate in prm_well_known_candidates(endpoint) {
+            if let Ok(response) = self
+                .client
+                .get(&candidate)
+                .header("Accept", "application/json")
+                .send()
+            {
+                if response.status().is_success() {
+                    return Ok(candidate);
+                }
+            }
+        }
+
+        Err(AppError::Message(
+            "could not discover OAuth resource metadata URL".to_string(),
+        ))
     }
 
     pub fn complete_oauth_redirect(&self, server_id: i64, redirect_url: &str) -> AppResult<()> {
@@ -353,41 +533,82 @@ impl OAuthStore {
             .pending
             .lock()
             .map_err(|_| AppError::Message("oauth store lock poisoned".to_string()))?
-            .remove(&server_id)
+            .get(&server_id)
+            .cloned()
             .ok_or_else(|| AppError::Message("no pending OAuth flow for this server".to_string()))?;
 
-        let token_response: TokenResponse = self
-            .client
-            .post(&pending.token_endpoint)
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("code", code),
-                ("redirect_uri", pending.redirect_uri.as_str()),
-                ("client_id", pending.client_id.as_str()),
-                ("code_verifier", pending.code_verifier.as_str()),
-            ])
-            .send()
-            .map_err(|error| AppError::Message(format!("token exchange failed: {error}")))?
-            .json()
-            .map_err(|error| AppError::Message(format!("invalid token response: {error}")))?;
+        let token_response = match self.exchange_authorization_code(&pending, code, true) {
+            Ok(token) => token,
+            Err(first_error) => {
+                eprintln!("[oauth] token exchange with resource failed: {first_error}");
+                self.exchange_authorization_code(&pending, code, false)
+                    .map_err(|_| first_error)?
+            }
+        };
+
+        if let Ok(mut pending_map) = self.pending.lock() {
+            pending_map.remove(&server_id);
+        }
 
         self.apply_token_response(db, server_id, token_response, Some(&pending.client_id))
     }
 
+    fn exchange_authorization_code(
+        &self,
+        pending: &PendingOAuthFlow,
+        code: &str,
+        include_resource: bool,
+    ) -> AppResult<TokenResponse> {
+        let mut form = vec![
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", pending.redirect_uri.as_str()),
+            ("client_id", pending.client_id.as_str()),
+            ("code_verifier", pending.code_verifier.as_str()),
+        ];
+        if include_resource {
+            form.push(("resource", pending.resource.as_str()));
+        }
+
+        let response = self
+            .client
+            .post(&pending.token_endpoint)
+            .form(&form)
+            .send()
+            .map_err(|error| AppError::Message(format!("token exchange failed: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .unwrap_or_else(|_| "<empty response>".to_string());
+            return Err(AppError::Message(format!(
+                "token exchange failed ({status}): {body}"
+            )));
+        }
+        response
+            .json()
+            .map_err(|error| AppError::Message(format!("invalid token response: {error}")))
+    }
+
     pub fn start_browser_sign_in(self: &Arc<Self>, server_id: i64) -> AppResult<()> {
         self.init_callback_listener();
+        self.ensure_oauth_flow_prepared(server_id)?;
 
+        let redirect_uri = self.oauth_redirect_uri()?;
         let auth_url = {
-            let pending = self
+            let mut pending = self
                 .pending
                 .lock()
                 .map_err(|_| AppError::Message("oauth store lock poisoned".to_string()))?;
-            pending
-                .get(&server_id)
-                .map(|flow| flow.authorization_url.clone())
-                .ok_or_else(|| {
-                    AppError::Message("no pending OAuth flow for this server".to_string())
-                })?
+            let flow = pending.get_mut(&server_id).ok_or_else(|| {
+                AppError::Message("no pending OAuth flow for this server".to_string())
+            })?;
+            if flow.redirect_uri != redirect_uri {
+                flow.redirect_uri = redirect_uri.clone();
+                flow.authorization_url =
+                    replace_redirect_uri_in_auth_url(&flow.authorization_url, &redirect_uri)?;
+            }
+            flow.authorization_url.clone()
         };
 
         let (sender, receiver) = mpsc::channel();
@@ -465,10 +686,11 @@ impl OAuthStore {
             }
             Err(error) => {
                 let message = error.to_string();
+                eprintln!("[oauth] complete_oauth_code failed: {message}");
                 self.notify_callback_waiter(server_id, Err(message.clone()));
                 (
-                    Err(message),
-                    oauth_error_page("Could not complete sign-in."),
+                    Err(message.clone()),
+                    oauth_error_page(&message),
                 )
             }
         }
@@ -513,7 +735,16 @@ impl OAuthStore {
         refresh_token: &str,
     ) -> AppResult<String> {
         let endpoint = server_endpoint(server)?;
-        let resource_metadata_url = well_known_resource_metadata_url(&endpoint);
+        let resource_metadata_url = self
+            .discover_resource_metadata_url(server.id, &endpoint)
+            .or_else(|_| {
+                prm_well_known_candidates(&endpoint)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        AppError::Message("could not discover OAuth resource metadata".to_string())
+                    })
+            })?;
         let prm: ProtectedResourceMetadata = self
             .client
             .get(&resource_metadata_url)
@@ -522,61 +753,97 @@ impl OAuthStore {
             .json()
             .map_err(|error| AppError::Message(format!("invalid resource metadata JSON: {error}")))?;
 
-        let issuer = prm
-            .authorization_servers
-            .first()
-            .ok_or_else(|| AppError::Message("resource metadata has no authorization_servers".to_string()))?
-            .trim()
-            .trim_end_matches('/')
-            .to_string();
-        let as_metadata = discover_authorization_server(&self.client, &issuer)?;
+        let issuers = resolve_authorization_server_issuers(&prm);
+        if issuers.is_empty() {
+            return Err(AppError::Message(
+                "resource metadata has no authorization_servers".to_string(),
+            ));
+        }
+
         let db_values = reveal_config_values_for_runtime(&server.config_values)?;
         let map = parse_values_map(&db_values)?;
         let client_id = read_plain_secret(&map, OAUTH_CLIENT_ID_KEY)?;
-        let resource = prm
-            .resource
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&endpoint);
+        let resource = resolve_resource_uri(&prm, &endpoint);
 
-        let mut form = vec![
-            ("grant_type".to_string(), "refresh_token".to_string()),
-            ("refresh_token".to_string(), refresh_token.to_string()),
-            ("resource".to_string(), resource.to_string()),
-        ];
-        if let Some(client_id) = client_id.filter(|value| !value.is_empty()) {
-            form.push(("client_id".to_string(), client_id));
-        }
-        let form_refs: Vec<(&str, &str)> = form
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
+        let mut last_error = None;
+        for issuer in issuers {
+            let as_metadata = match discover_authorization_server(&self.client, &issuer) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    continue;
+                }
+            };
+            let token_endpoint = match resolve_endpoint_url(&issuer, &as_metadata.token_endpoint) {
+                Ok(endpoint) => endpoint,
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    continue;
+                }
+            };
 
-        let token_response: TokenResponse = self
-            .client
-            .post(&as_metadata.token_endpoint)
-            .form(&form_refs)
-            .send()
-            .map_err(|error| AppError::Message(format!("refresh token request failed: {error}")))?
-            .json()
-            .map_err(|error| AppError::Message(format!("invalid refresh token response: {error}")))?;
+            let mut form = vec![
+                ("grant_type".to_string(), "refresh_token".to_string()),
+                ("refresh_token".to_string(), refresh_token.to_string()),
+                ("resource".to_string(), resource.clone()),
+            ];
+            if let Some(client_id) = client_id.clone().filter(|value| !value.is_empty()) {
+                form.push(("client_id".to_string(), client_id));
+            }
+            let form_refs: Vec<(&str, &str)> = form
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect();
 
-        if let Some(new_refresh) = token_response.refresh_token.as_deref().filter(|v| !v.is_empty()) {
-            let mut next_map = map;
-            next_map.insert(
-                OAUTH_REFRESH_TOKEN_KEY.to_string(),
-                Value::String(new_refresh.to_string()),
-            );
+            let response = match self
+                .client
+                .post(&token_endpoint)
+                .form(&form_refs)
+                .send()
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(format!("refresh token request failed: {error}"));
+                    continue;
+                }
+            };
+            let response = match response.error_for_status() {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(format!("refresh token request failed: {error}"));
+                    continue;
+                }
+            };
+            let token_response = match response.json::<TokenResponse>() {
+                Ok(token) => token,
+                Err(error) => {
+                    last_error = Some(format!("invalid refresh token response: {error}"));
+                    continue;
+                }
+            };
+
+            if let Some(new_refresh) = token_response.refresh_token.as_deref().filter(|v| !v.is_empty())
+            {
+                let mut next_map = map.clone();
+                next_map.insert(
+                    OAUTH_REFRESH_TOKEN_KEY.to_string(),
+                    Value::String(new_refresh.to_string()),
+                );
+                self.apply_token_response_in_memory(server.id, &token_response)?;
+                self.persist_config_values(db, server, &next_map)?;
+                return token_response.access_token.ok_or_else(|| {
+                    AppError::Message("refresh response missing access_token".to_string())
+                });
+            }
             self.apply_token_response_in_memory(server.id, &token_response)?;
-            self.persist_config_values(db, server, &next_map)?;
-            return token_response
-                .access_token
-                .ok_or_else(|| AppError::Message("refresh response missing access_token".to_string()));
+            return token_response.access_token.ok_or_else(|| {
+                AppError::Message("refresh response missing access_token".to_string())
+            });
         }
-        self.apply_token_response_in_memory(server.id, &token_response)?;
-        token_response
-            .access_token
-            .ok_or_else(|| AppError::Message("refresh response missing access_token".to_string()))
+
+        Err(AppError::Message(
+            last_error.unwrap_or_else(|| "refresh token request failed".to_string()),
+        ))
     }
 
     fn apply_token_response(
@@ -643,6 +910,14 @@ impl OAuthStore {
             let _ = app.emit(MCP_OAUTH_SIGN_IN_EVENT, challenge);
         }
     }
+
+    fn resolve_server_id_for_oauth_state(&self, state: &str) -> Option<i64> {
+        let pending = self.pending.lock().ok()?;
+        pending
+            .iter()
+            .find(|(_, flow)| flow.oauth_state == state)
+            .map(|(server_id, _)| *server_id)
+    }
 }
 
 impl AccessTokenSession {
@@ -667,6 +942,9 @@ pub fn parse_auth_required_error(message: &str) -> Option<McpAuthChallenge> {
 struct ProtectedResourceMetadata {
     #[serde(default)]
     resource: Option<String>,
+    #[serde(default)]
+    authorization_server: Option<String>,
+    #[serde(default)]
     authorization_servers: Vec<String>,
     #[serde(default)]
     scopes_supported: Option<Vec<String>>,
@@ -694,46 +972,221 @@ struct ClientRegistrationResponse {
 }
 
 fn discover_authorization_server(client: &Client, issuer: &str) -> AppResult<AuthorizationServerMetadata> {
-    let url = format!("{issuer}/.well-known/oauth-authorization-server");
-    if let Ok(response) = client.get(&url).send() {
-        if response.status().is_success() {
-            return response
-                .json()
-                .map_err(|error| AppError::Message(format!("invalid AS metadata: {error}")));
+    let urls = authorization_server_metadata_urls(issuer);
+    let mut last_error = None;
+    for url in urls {
+        match fetch_authorization_server_metadata(client, &url) {
+            Ok(metadata) => return Ok(metadata),
+            Err(error) => last_error = Some(error.to_string()),
         }
     }
-    let oidc = format!("{issuer}/.well-known/openid-configuration");
-    client
-        .get(&oidc)
-        .send()
-        .map_err(|error| AppError::Message(format!("failed to fetch AS metadata: {error}")))?
-        .json()
-        .map_err(|error| AppError::Message(format!("invalid OIDC metadata: {error}")))
+    Err(AppError::Message(
+        last_error.unwrap_or_else(|| "authorization server discovery failed".to_string()),
+    ))
 }
 
-fn register_or_default_client(
+fn fetch_authorization_server_metadata(
+    client: &Client,
+    url: &str,
+) -> AppResult<AuthorizationServerMetadata> {
+    let response = client
+        .get(url)
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|error| AppError::Message(format!("authorization server discovery failed: {error}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Message(format!(
+            "authorization server discovery failed for {url}: {}",
+            response.status()
+        )));
+    }
+    response
+        .json()
+        .map_err(|error| AppError::Message(format!("invalid authorization server metadata: {error}")))
+}
+
+fn authorization_server_metadata_urls(issuer: &str) -> Vec<String> {
+    let issuer = normalize_issuer(issuer);
+    if issuer.contains("/.well-known/oauth-authorization-server")
+        || issuer.contains("/.well-known/openid-configuration")
+    {
+        return vec![issuer];
+    }
+
+    let Ok(parsed) = Url::parse(&issuer) else {
+        return vec![
+            format!("{issuer}/.well-known/oauth-authorization-server"),
+            format!("{issuer}/.well-known/openid-configuration"),
+        ];
+    };
+
+    let scheme = parsed.scheme();
+    let host = parsed.host_str().unwrap_or("").to_lowercase();
+    let port_suffix = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    let base = format!("{scheme}://{host}{port_suffix}");
+
+    let path = parsed.path().trim_end_matches('/');
+    let path = if path.is_empty() || path == "/" {
+        ""
+    } else {
+        path
+    };
+
+    let mut urls = Vec::new();
+    if !path.is_empty() {
+        urls.push(format!("{base}/.well-known/oauth-authorization-server{path}"));
+        urls.push(format!("{base}/.well-known/openid-configuration{path}"));
+        urls.push(format!("{base}{path}/.well-known/openid-configuration"));
+    }
+    urls.push(format!("{base}/.well-known/oauth-authorization-server"));
+    urls.push(format!("{base}/.well-known/openid-configuration"));
+    urls
+}
+
+fn resolve_authorization_server_issuers(prm: &ProtectedResourceMetadata) -> Vec<String> {
+    if !prm.authorization_servers.is_empty() {
+        return prm
+            .authorization_servers
+            .iter()
+            .map(|issuer| normalize_issuer(issuer))
+            .filter(|issuer| !issuer.is_empty())
+            .collect();
+    }
+    prm.authorization_server
+        .as_deref()
+        .map(normalize_issuer)
+        .filter(|issuer| !issuer.is_empty())
+        .into_iter()
+        .collect()
+}
+
+fn resolve_oauth_client_id(
     client: &Client,
     metadata: &AuthorizationServerMetadata,
-    redirect_uri: &str,
+    redirect_uris: &[String],
 ) -> AppResult<String> {
-    if let Some(registration_endpoint) = metadata.registration_endpoint.as_deref() {
-        let body = json!({
-            "client_name": "TaseDeck",
-            "redirect_uris": [redirect_uri],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-            "application_type": "native"
-        });
-        if let Ok(response) = client.post(registration_endpoint).json(&body).send() {
-            if response.status().is_success() {
-                if let Ok(registration) = response.json::<ClientRegistrationResponse>() {
-                    return Ok(registration.client_id);
-                }
-            }
+    let Some(registration_endpoint) = metadata.registration_endpoint.as_deref() else {
+        return Err(AppError::Message(
+            "OAuth client registration is required but no registration endpoint was advertised"
+                .to_string(),
+        ));
+    };
+
+    let body = json!({
+        "client_name": "TaseDeck",
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "native"
+    });
+    let response = client
+        .post(registration_endpoint)
+        .json(&body)
+        .send()
+        .map_err(|error| AppError::Message(format!("client registration failed: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .unwrap_or_else(|_| "<empty response>".to_string());
+        return Err(AppError::Message(format!(
+            "client registration failed ({status}): {body}"
+        )));
+    }
+    let registration = response
+        .json::<ClientRegistrationResponse>()
+        .map_err(|error| AppError::Message(format!("invalid client registration response: {error}")))?;
+    if registration.client_id.trim().is_empty() {
+        return Err(AppError::Message(
+            "client registration returned an empty client_id".to_string(),
+        ));
+    }
+    Ok(registration.client_id)
+}
+
+fn resolve_resource_uri(prm: &ProtectedResourceMetadata, endpoint: &str) -> String {
+    prm.resource
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| normalize_resource_uri(endpoint))
+}
+
+fn normalize_resource_uri(endpoint: &str) -> String {
+    let trimmed = endpoint.trim();
+    let Ok(mut url) = Url::parse(trimmed) else {
+        return trimmed.trim_end_matches('/').to_string();
+    };
+    url.set_query(None);
+    url.set_fragment(None);
+    let path = url.path().trim_end_matches('/').to_string();
+    url.set_path(if path.is_empty() { "/" } else { path.as_str() });
+    url.to_string().trim_end_matches('/').to_string()
+}
+
+fn resolve_oauth_scope(prm: &ProtectedResourceMetadata) -> Option<String> {
+    prm.scopes_supported
+        .as_ref()
+        .filter(|scopes| !scopes.is_empty())
+        .map(|scopes| scopes.join(" "))
+}
+
+fn build_oauth_state(server_id: i64) -> String {
+    format!("{server_id}:{}", generate_code_verifier())
+}
+
+fn parse_oauth_state(state: &str) -> Option<i64> {
+    let server_id = state.split(':').next()?.trim();
+    if server_id.is_empty() {
+        return None;
+    }
+    server_id.parse().ok()
+}
+
+fn normalize_issuer(issuer: &str) -> String {
+    issuer.trim().trim_end_matches('/').to_string()
+}
+
+fn resolve_endpoint_url(issuer: &str, endpoint: &str) -> AppResult<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Err(AppError::Message("OAuth endpoint URL is empty".to_string()));
+    }
+    if Url::parse(endpoint).is_ok() && endpoint.contains("://") {
+        return Ok(endpoint.to_string());
+    }
+    let base = Url::parse(normalize_issuer(issuer).as_str())
+        .map_err(|error| AppError::Message(format!("invalid issuer URL: {error}")))?;
+    base.join(endpoint.trim_start_matches('/'))
+        .map(|url| url.to_string())
+        .map_err(|error| AppError::Message(format!("invalid OAuth endpoint URL: {error}")))
+}
+
+fn replace_redirect_uri_in_auth_url(auth_url: &str, redirect_uri: &str) -> AppResult<String> {
+    let mut url = Url::parse(auth_url)
+        .map_err(|error| AppError::Message(format!("invalid authorization URL: {error}")))?;
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    {
+        let mut query = url.query_pairs_mut();
+        query.clear();
+        for (key, value) in pairs {
+            let next_value = if key == "redirect_uri" {
+                redirect_uri.to_string()
+            } else {
+                value
+            };
+            query.append_pair(&key, &next_value);
         }
     }
-    Ok("tase-deck".to_string())
+    Ok(url.to_string())
 }
 
 fn generate_code_verifier() -> String {
@@ -779,13 +1232,49 @@ fn unquote_auth_param(raw: &str) -> String {
         .to_string()
 }
 
-fn well_known_resource_metadata_url(endpoint: &str) -> String {
-    let parsed = Url::parse(endpoint).ok();
-    if let Some(url) = parsed {
-        let origin = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
-        return format!("{origin}/.well-known/oauth-protected-resource");
+fn prm_well_known_candidates(endpoint: &str) -> Vec<String> {
+    let trimmed = endpoint.trim();
+    let Ok(url) = Url::parse(trimmed) else {
+        return vec![format!("{trimmed}/.well-known/oauth-protected-resource")];
+    };
+    let origin = format!(
+        "{}://{}",
+        url.scheme(),
+        url.host_str().unwrap_or_default()
+    );
+    let path = url.path().trim_end_matches('/');
+    let mut candidates = Vec::new();
+    if !path.is_empty() && path != "/" {
+        candidates.push(format!("{origin}/.well-known/oauth-protected-resource{path}"));
     }
-    format!("{endpoint}/.well-known/oauth-protected-resource")
+    candidates.push(format!("{origin}/.well-known/oauth-protected-resource"));
+    candidates
+}
+
+fn well_known_resource_metadata_url(endpoint: &str) -> String {
+    prm_well_known_candidates(endpoint)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| format!("{endpoint}/.well-known/oauth-protected-resource"))
+}
+
+fn parse_www_authenticate_scope(www_authenticate: Option<&str>) -> Option<String> {
+    let header = www_authenticate?;
+    for part in header.split(',') {
+        let trimmed = part.trim();
+        let value = trimmed
+            .strip_prefix("scope=")
+            .or_else(|| {
+                trimmed
+                    .find("scope=")
+                    .map(|index| &trimmed[index + "scope=".len()..])
+            })?;
+        let scope = unquote_auth_param(value);
+        if !scope.is_empty() {
+            return Some(scope);
+        }
+    }
+    None
 }
 
 fn server_endpoint(server: &McpServer) -> AppResult<String> {
@@ -849,22 +1338,26 @@ fn handle_oauth_callback_connection(oauth: &OAuthStore, mut stream: TcpStream) -
         }
     };
 
-    if path != OAUTH_CALLBACK_PATH {
+    if path != OAUTH_CALLBACK_PATH && path != OAUTH_CALLBACK_PATH_ALT {
         write_http_html_response(&mut stream, 404, &oauth_error_page("Not found."))?;
         return Ok(());
     }
 
     let params = parse_query_params(query);
-    let server_id = match params.get("state").and_then(|value| value.parse::<i64>().ok()) {
-        Some(server_id) if server_id > 0 => server_id,
-        _ => {
-            write_http_html_response(
-                &mut stream,
-                400,
-                &oauth_error_page("Missing or invalid OAuth state."),
-            )?;
-            return Ok(());
-        }
+    let server_id = match params.get("state").map(String::as_str) {
+        Some(state) => oauth
+            .resolve_server_id_for_oauth_state(state)
+            .or_else(|| parse_oauth_state(state))
+            .filter(|id| *id > 0),
+        None => None,
+    };
+    let Some(server_id) = server_id else {
+        write_http_html_response(
+            &mut stream,
+            400,
+            &oauth_error_page("Missing or invalid OAuth state."),
+        )?;
+        return Ok(());
     };
     let code = params.get("code").map(String::as_str);
     let oauth_error = params
@@ -962,6 +1455,10 @@ fn oauth_success_page() -> String {
 }
 
 fn oauth_error_page(message: &str) -> String {
+    let safe_message = message
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -972,13 +1469,13 @@ fn oauth_error_page(message: &str) -> String {
     body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #f5f5f5; display: grid; place-items: center; min-height: 100vh; margin: 0; }}
     .card {{ max-width: 420px; padding: 24px 28px; border-radius: 12px; background: #171a21; border: 1px solid #2a2f3a; text-align: center; }}
     h1 {{ font-size: 20px; margin: 0 0 8px; }}
-    p {{ margin: 0; color: #a8b0bf; line-height: 1.5; }}
+    p {{ margin: 0; color: #a8b0bf; line-height: 1.5; word-break: break-word; }}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Sign-in failed</h1>
-    <p>{message}</p>
+    <p>{safe_message}</p>
   </div>
 </body>
 </html>"#

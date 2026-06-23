@@ -28,14 +28,18 @@ pub struct AgentConfigInfo {
 }
 
 impl McpConfigLocation {
-    pub fn from_paths(config_dir: PathBuf) -> Self {
-        let mcp_json_path = config_dir.join("mcp.json");
+    pub fn from_dir_and_file(config_dir: PathBuf, file_name: &str) -> Self {
+        let mcp_json_path = config_dir.join(file_name);
         Self {
             dir_exists: config_dir.is_dir(),
             mcp_json_exists: mcp_json_path.is_file(),
             config_dir: path_to_string(config_dir),
             mcp_json_path: path_to_string(mcp_json_path),
         }
+    }
+
+    pub fn from_paths(config_dir: PathBuf) -> Self {
+        Self::from_dir_and_file(config_dir, "mcp.json")
     }
 }
 

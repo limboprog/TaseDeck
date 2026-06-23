@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listInstalledMcpServers } from "./api";
 import {
+  MCP_CATALOG_CHANGED_EVENT,
   MCP_INSTALLED_EVENT,
   MCP_REMOVED_EVENT,
   type InstalledMcpServer,
@@ -43,14 +44,19 @@ export function useInstalledMcpServers() {
       if (typeof serverId === "number") {
         setServers((current) => current.filter((server) => server.id !== serverId));
       }
+    };
+
+    const handleCatalogChanged = () => {
       void refresh({ silent: true });
     };
 
     window.addEventListener(MCP_INSTALLED_EVENT, handleInstalled);
     window.addEventListener(MCP_REMOVED_EVENT, handleRemoved);
+    window.addEventListener(MCP_CATALOG_CHANGED_EVENT, handleCatalogChanged);
     return () => {
       window.removeEventListener(MCP_INSTALLED_EVENT, handleInstalled);
       window.removeEventListener(MCP_REMOVED_EVENT, handleRemoved);
+      window.removeEventListener(MCP_CATALOG_CHANGED_EVENT, handleCatalogChanged);
     };
   }, [refresh]);
 

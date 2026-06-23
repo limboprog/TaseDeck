@@ -97,3 +97,87 @@ textarea:focus-visible {
   display: block;
   animation: mcp-add-spin 0.85s linear infinite;
 }
+
+.mcp-list-card-shell {
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+html[data-theme="dark"] .mcp-list-card-shell:hover {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  background-color: rgba(255, 255, 255, 0.032) !important;
+}
+
+html[data-theme="light"] .mcp-list-card-shell:hover {
+  border-color: rgba(15, 17, 20, 0.08) !important;
+  background-color: rgba(15, 17, 20, 0.028) !important;
+}
+
+html[data-theme="dark"] .mcp-list-card-shell--selected,
+html[data-theme="dark"] .mcp-list-card-shell--selected:hover {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  background-color: rgba(255, 255, 255, 0.032) !important;
+}
+
+html[data-theme="light"] .mcp-list-card-shell--selected,
+html[data-theme="light"] .mcp-list-card-shell--selected:hover {
+  border-color: rgba(15, 17, 20, 0.08) !important;
+  background-color: rgba(15, 17, 20, 0.028) !important;
+}
+
+html[data-theme="dark"] .pane-create-row,
+html[data-theme="dark"] .pane-create-row:hover {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  background-color: var(--td-surface) !important;
+}
+
+html[data-theme="light"] .pane-create-row,
+html[data-theme="light"] .pane-create-row:hover {
+  border-color: rgba(15, 17, 20, 0.08) !important;
+  background-color: var(--td-surface) !important;
+}
+
+.pane-row--accent .mcp-list-card-shell,
+html[data-theme="dark"] .pane-row--accent .mcp-list-card-shell,
+html[data-theme="dark"] .pane-row--accent .mcp-list-card-shell:hover,
+html[data-theme="light"] .pane-row--accent .mcp-list-card-shell,
+html[data-theme="light"] .pane-row--accent .mcp-list-card-shell:hover,
+html[data-theme="dark"] .pane-row--accent .mcp-list-card-shell--selected,
+html[data-theme="dark"] .pane-row--accent .mcp-list-card-shell--selected:hover,
+html[data-theme="light"] .pane-row--accent .mcp-list-card-shell--selected,
+html[data-theme="light"] .pane-row--accent .mcp-list-card-shell--selected:hover {
+  border-color: #4ade80 !important;
+}
+
+.mcp-inline-search {
+  transition: border-color 0.15s ease;
+}
+
+html[data-theme="dark"] .mcp-inline-search:focus-within,
+html[data-theme="light"] .mcp-inline-search:focus-within {
+  border-color: var(--td-alpha-12) !important;
+}
+
+.mcp-list-collapsible-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s ease;
+}
+
+.mcp-list-collapsible-body[data-animate="false"] {
+  transition: none;
+}
+
+.mcp-list-collapsible-body[data-expanded="true"] {
+  grid-template-rows: 1fr;
+}
+
+.mcp-list-collapsible-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.mcp-list-section-header {
+  position: sticky;
+}

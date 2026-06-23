@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode, type RefObject } from "react";
 import {
   MCP_LIST_SCROLL_CLIP_Z_INDEX,
   MCP_LIST_STICKY_TOP,
@@ -10,23 +10,39 @@ type ScrollFadePanelProps = {
   header?: ReactNode;
   children: ReactNode;
   contentPadding?: string;
+  contentGap?: number;
+  headerPaddingBottom?: number;
   /** Restore and persist vertical scroll for the session. */
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
+  scrollRef?: RefObject<HTMLDivElement | null>;
 };
 
 export function ScrollFadePanel({
   header,
   children,
   contentPadding = "16px",
+  contentGap = 12,
+  headerPaddingBottom = 12,
   initialScrollTop = 0,
   onScrollTopChange,
+  scrollRef,
 }: ScrollFadePanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const internalScrollRef = useRef<HTMLDivElement>(null);
+
+  const setScrollNode = useCallback(
+    (node: HTMLDivElement | null) => {
+      internalScrollRef.current = node;
+      if (scrollRef) {
+        scrollRef.current = node;
+      }
+    },
+    [scrollRef],
+  );
   const restoredScrollRef = useRef(false);
 
   useEffect(() => {
-    const node = scrollRef.current;
+    const node = internalScrollRef.current;
     if (!node || restoredScrollRef.current || initialScrollTop <= 0) {
       return;
     }
@@ -35,7 +51,7 @@ export function ScrollFadePanel({
   }, [initialScrollTop]);
 
   const handleScroll = useCallback(() => {
-    const node = scrollRef.current;
+    const node = internalScrollRef.current;
     if (!node) {
       return;
     }
@@ -53,7 +69,7 @@ export function ScrollFadePanel({
             flexShrink: 0,
             background: colors.surface,
             padding: contentPadding,
-            paddingBottom: 12,
+            paddingBottom: headerPaddingBottom,
           }}
         >
           {header}
@@ -62,7 +78,7 @@ export function ScrollFadePanel({
 
       <div className={layoutClasses.clip} style={{ position: "relative", flex: 1 }}>
         <div
-          ref={scrollRef}
+          ref={setScrollNode}
           className={layoutClasses.scrollY}
           onScroll={handleScroll}
           style={{
@@ -77,7 +93,8 @@ export function ScrollFadePanel({
               paddingTop: MCP_LIST_STICKY_TOP,
               display: "flex",
               flexDirection: "column",
-              gap: 12,
+              gap: contentGap,
+              position: "relative",
             }}
           >
             <div
@@ -92,7 +109,17 @@ export function ScrollFadePanel({
                 boxShadow: `0 -100vh 0 100vh ${colors.surface}`,
               }}
             />
-            {children}
+            <div
+              style={{
+                position: "relative",
+                zIndex: MCP_LIST_SCROLL_CLIP_Z_INDEX + 1,
+                display: "flex",
+                flexDirection: "column",
+                gap: contentGap,
+              }}
+            >
+              {children}
+            </div>
           </div>
         </div>
       </div>

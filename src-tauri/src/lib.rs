@@ -7,20 +7,35 @@ mod services;
 
 use commands::{
     agent_record_create, agent_record_delete, agent_record_get, agent_record_list,
-    agent_record_update, agents_ensure_mcp_json, agents_get_config, agents_list_catalog,
+    agent_record_read_mcp_json, agent_record_update, agent_record_write_mcp_json,
+    agents_ensure_mcp_json, agents_get_config, agents_list_catalog,
     agents_read_mcp_json, agents_resolve_auto_path, graph_delete, graph_get_state,
     graph_list_placeable_agents, graph_list_placeable_mcp_ids, graph_save_links,     mcp_add_from_registry,
     mcp_add_server, mcp_analyze_server, mcp_compile_run_command, mcp_ensure_tools, mcp_get_server,
     mcp_get_tools,
+    mcp_get_tool_prefs,
+    mcp_set_tool_pref,
+    mcp_replace_tool_prefs,
     mcp_install_local,
     mcp_is_running, mcp_list_run_transports, mcp_list_servers, mcp_probe_operation,
     mcp_refresh_tools, mcp_remove_server,
     mcp_oauth_complete, mcp_oauth_get_challenge, mcp_oauth_set_api_key, mcp_oauth_start_sign_in,
-    mcp_start_server, mcp_stop_server, mcp_update_server, registry_http_get, security_initialize,
-    security_mask_secret,
-    topology_get_status, topology_start, topology_stop, usage_list_entries,
+    mcp_start_server, mcp_stop_server,     mcp_update_server, registry_http_get, security_get_use_os_keyring, security_initialize,
+    security_mask_secret, security_set_use_os_keyring,
+    topology_aggregator_script_path, topology_get_status, topology_mcp_server_key, topology_proxy_script_path, topology_start,
+    topology_stop, usage_list_entries,     project_record_create, project_record_delete,
+    project_record_get, project_record_get_detail, project_record_link_agent, project_record_list,
+    project_record_assign_preset, project_record_update_assignment, preset_record_create,
+    preset_record_delete, preset_record_list, preset_record_try_delete, preset_record_update, project_record_add_server,
+    project_record_remove_server, project_record_unassign_preset,
+    project_record_use_custom_preset, project_record_use_default_preset,
+    project_record_delete_custom_preset,
+    project_record_reset_agent,
+    project_record_unlink_agent, project_record_export_proxy_config,
+    workspace_bootstrap,
+    workspace_get_bootstrap_status,
 };
-use services::{ensure_initialized, OAuthStore, UsageLogStore};
+use services::{ensure_initialized, OAuthStore, ProxyLogIngestor, ProxyOAuthRefresher, UsageLogStore};
 use core::fs::{ensure_user_storage_dir, user_database_path};
 use db::Database;
 use services::{McpToolsStore, TopologyRunStore};
@@ -69,13 +84,19 @@ pub fn run() {
             oauth.attach_app(app.handle().clone());
             let tools_store = Arc::new(McpToolsStore::new());
             tools_store.attach_oauth(Arc::clone(&oauth));
-            let usage_log = Arc::new(UsageLogStore::new(db.as_ref()));
+            let usage_log = Arc::new(UsageLogStore::new(Arc::clone(&db)));
             usage_log.attach_app(app.handle().clone());
+            let proxy_log_ingestor = Arc::new(ProxyLogIngestor::new(Arc::clone(&usage_log)));
+            proxy_log_ingestor.start_background();
+            let proxy_oauth_refresher = Arc::new(ProxyOAuthRefresher::new(Arc::clone(&oauth)));
+            proxy_oauth_refresher.start_background();
             app.manage(db);
             app.manage(oauth);
             app.manage(tools_store);
             app.manage(Arc::new(TopologyRunStore::new()));
             app.manage(usage_log);
+            app.manage(proxy_log_ingestor);
+            app.manage(proxy_oauth_refresher);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -84,6 +105,11 @@ pub fn run() {
             agent_record_create,
             agent_record_update,
             agent_record_delete,
+            agent_record_read_mcp_json,
+            agent_record_write_mcp_json,
+            topology_aggregator_script_path,
+            topology_proxy_script_path,
+            topology_mcp_server_key,
             graph_get_state,
             graph_save_links,
             graph_delete,
@@ -110,6 +136,9 @@ pub fn run() {
             mcp_add_server,
             mcp_update_server,
             mcp_remove_server,
+            mcp_get_tool_prefs,
+            mcp_set_tool_pref,
+            mcp_replace_tool_prefs,
             mcp_install_local,
             mcp_oauth_complete,
             mcp_oauth_get_challenge,
@@ -118,10 +147,36 @@ pub fn run() {
             registry_http_get,
             security_initialize,
             security_mask_secret,
+            security_get_use_os_keyring,
+            security_set_use_os_keyring,
             topology_start,
             topology_stop,
             topology_get_status,
             usage_list_entries,
+            workspace_get_bootstrap_status,
+            workspace_bootstrap,
+            project_record_list,
+            project_record_get,
+            project_record_get_detail,
+            project_record_create,
+            project_record_delete,
+            project_record_update_assignment,
+            project_record_add_server,
+            project_record_remove_server,
+            project_record_assign_preset,
+            project_record_unassign_preset,
+            project_record_use_default_preset,
+            project_record_use_custom_preset,
+            project_record_delete_custom_preset,
+            project_record_reset_agent,
+            project_record_unlink_agent,
+            project_record_link_agent,
+            project_record_export_proxy_config,
+            preset_record_list,
+            preset_record_create,
+            preset_record_update,
+            preset_record_delete,
+            preset_record_try_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

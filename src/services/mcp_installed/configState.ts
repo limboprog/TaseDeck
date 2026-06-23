@@ -69,14 +69,18 @@ export function resolveRunCommandsState(options: {
   jsonConfig?: string;
   analysisRunCommands?: RunCommandsState;
 }): RunCommandsState {
+  const fromValues = parseRunCommandsState(options.values);
   const fromAnalysis = normalizeRunCommandsState(
     options.analysisRunCommands ?? { activeId: null, commands: [], sharedArgs: [] },
   );
   if (fromAnalysis.commands.length > 0) {
-    return fromAnalysis;
+    return {
+      ...fromAnalysis,
+      rawMode: fromValues.rawMode,
+      rawCommand: fromValues.rawCommand,
+    };
   }
 
-  const fromValues = parseRunCommandsState(options.values);
   if (fromValues.commands.length > 0) {
     return fromValues;
   }
@@ -275,7 +279,33 @@ function isStdioProfileConfigured(
   return true;
 }
 
-/** Remote: try with URL only (keys optional). Stdio: full config required. */
+function isStdioProfileRunnable(
+  server: InstalledMcpServer,
+  runCommands: RunCommandsState,
+): boolean {
+  const profile = getActiveRunCommandProfile(runCommands);
+  if (profile?.command?.trim()) {
+    return true;
+  }
+  if (server.runCommand?.trim()) {
+    return true;
+  }
+  if (server.path?.trim()) {
+    return true;
+  }
+  if (!profile?.transport && server.jsonConfig.trim()) {
+    const inferred = inferRunCommandsFromJson(server.jsonConfig);
+    if (inferred) {
+      const inferredProfile = getActiveRunCommandProfile(inferred);
+      if (inferredProfile?.command?.trim()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Remote: try with URL only (keys optional). Stdio: runnable command is enough to probe. */
 export function canAttemptMcpTools(
   server: InstalledMcpServer,
   options?: {
@@ -303,7 +333,7 @@ export function canAttemptMcpTools(
     }
   }
 
-  return isMcpServerConfigured(server, { values: options?.values, runCommands });
+  return isStdioProfileRunnable(server, runCommands);
 }
 
 export function isMcpServerConfigured(

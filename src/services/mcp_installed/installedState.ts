@@ -4,6 +4,8 @@ import {
   hasLocalPackages,
   hasRemoteConnections,
 } from "../mcp_registry/parser";
+import { entryKey } from "../mcp_registry/searchCore";
+import { getRegistryKeyFromInstalled } from "./registryConfig";
 import type { InstalledMcpServer } from "./types";
 
 const InstalledMcpPathsContext = createContext<ReadonlySet<string>>(new Set());
@@ -80,4 +82,28 @@ export function isRegistryEntryInstalled(
     }
   }
   return false;
+}
+
+export function findInstalledServerForEntry(
+  entry: McpServerEntry,
+  servers: InstalledMcpServer[],
+): InstalledMcpServer | null {
+  const lookupKeys = getRegistryInstallLookupKeys(entry);
+  const registryKey = entryKey(entry).toLowerCase();
+
+  for (const server of servers) {
+    if (server.path && lookupKeys.has(server.path)) {
+      return server;
+    }
+    const name = server.name.trim().toLowerCase();
+    if (name && lookupKeys.has(name)) {
+      return server;
+    }
+    const storedKey = getRegistryKeyFromInstalled(server)?.toLowerCase();
+    if (storedKey && storedKey === registryKey) {
+      return server;
+    }
+  }
+
+  return null;
 }

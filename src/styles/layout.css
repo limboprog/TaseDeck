@@ -95,22 +95,21 @@ html[data-theme="light"] {
   background: transparent;
 }
 
+/* Scrollable but no visible scrollbar (e.g. project detail). */
+.td-scroll-y-invisible {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.td-scroll-y-invisible::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* Flex children: allow shrinking so content does not force parent scrollbars. */
 .td-stack > *,
 .td-clip > .td-stack,
 .td-scroll-y > * {
   min-width: 0;
-}
-
-/* Topology graph — expandable + control (width then height, overlapped). */
-.topology-add-control {
-  transition:
-    width 0.14s ease,
-    height 0.16s ease 0.04s;
-}
-
-.topology-add-control:not(.is-open) {
-  transition:
-    height 0.12s ease,
-    width 0.14s ease 0.06s;
 }

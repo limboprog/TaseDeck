@@ -11,14 +11,20 @@ pub trait AgentConfigProvider: Send + Sync {
         "mcpServers"
     }
 
-    /// Parent directories that may contain `mcp.json` (checked in order; usually one exists per OS).
+    /// Config file name inside each candidate directory (`mcp.json` by default).
+    fn mcp_config_file_name(&self) -> &'static str {
+        "mcp.json"
+    }
+
+    /// Parent directories that may contain the MCP config file (checked in order).
     fn candidate_config_dirs(&self) -> Vec<PathBuf>;
 
     fn resolve_config(&self) -> AgentConfigInfo {
+        let file_name = self.mcp_config_file_name();
         let candidates: Vec<McpConfigLocation> = self
             .candidate_config_dirs()
             .into_iter()
-            .map(McpConfigLocation::from_paths)
+            .map(|dir| McpConfigLocation::from_dir_and_file(dir, file_name))
             .collect();
 
         let active = candidates
@@ -47,10 +53,9 @@ pub trait AgentConfigProvider: Send + Sync {
         if !path.is_file() {
             return Ok(None);
         }
-        let raw = std::fs::read_to_string(&path)?;
-        let value = serde_json::from_str(&raw)
-            .map_err(|error| crate::error::AppError::Message(format!("invalid mcp.json: {error}")))?;
-        Ok(Some(value))
+        crate::agents::mcp_json::read_agent_mcp_config_as_json(&path, self.kind()).map_err(
+            |error| crate::error::AppError::Message(error),
+        )
     }
 
     fn ensure_mcp_json(&self) -> crate::error::AppResult<PathBuf> {
@@ -65,10 +70,21 @@ pub trait AgentConfigProvider: Send + Sync {
             })?;
 
         std::fs::create_dir_all(&config_dir)?;
-        let mcp_path = config_dir.join("mcp.json");
+        let mcp_path = config_dir.join(self.mcp_config_file_name());
         if !mcp_path.is_file() {
-            let template = crate::agents::mcp_json::default_mcp_json_template(self.kind());
-            std::fs::write(&mcp_path, template)?;
+            if self.mcp_config_file_name() == "mcp.json" {
+                let template = crate::agents::mcp_json::default_mcp_json_template(self.kind());
+                std::fs::write(&mcp_path, template)?;
+            } else if self.mcp_config_file_name().ends_with(".toml") {
+                std::fs::write(
+                    &mcp_path,
+                    "# MCP servers: use `codex mcp add` or edit [mcp_servers.*] tables\n",
+                )?;
+            } else {
+                let root_key = self.mcp_json_servers_key();
+                let template = format!("{{\n  \"{root_key}\": {{}}\n}}\n");
+                std::fs::write(&mcp_path, template)?;
+            }
         }
         Ok(mcp_path)
     }

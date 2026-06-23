@@ -12,6 +12,7 @@ const cssVar = (name: string) => `var(${name})` as const;
 
 /** Shared brand / status colors (both schemes). */
 const shared = {
+  // accent: "rgb(126, 78, 178)",
   accent: "#8B5CF6",
   error: "#EF4444",
   errorSoft: "#f87171",
@@ -29,6 +30,8 @@ const darkCssVars: Record<string, string> = {
   "--td-command-surface-hover": "#1c1e21",
   "--td-foreground": "rgb(232, 234, 237)",
   "--td-muted": "#8B9199",
+  "--td-tree-rail": "#6B7178",
+  "--td-panel-foreground": "rgb(210, 213, 218)",
   "--td-border": "rgba(64, 65, 66, 0.5)",
   "--td-glass-fill-top": "rgba(24, 25, 27, 0.58)",
   "--td-glass-fill-bottom": "rgba(18, 19, 20, 0.88)",
@@ -58,6 +61,8 @@ const darkCssVars: Record<string, string> = {
   "--td-graph-node-bg": "#141516",
   "--td-graph-node-header-agent": "#18191b",
   "--td-graph-node-header-mcp": "#161718",
+  "--td-project-node-significant": "#2D2D30",
+  "--td-project-node-functional": "#1A1A1C",
   "--td-graph-block-bg": "rgba(20, 21, 22, 0.92)",
   "--td-graph-block-border": "rgba(139, 92, 246, 0.35)",
   "--td-graph-wire-active": "rgba(140, 180, 255, 0.85)",
@@ -93,6 +98,8 @@ const lightCssVars: Record<string, string> = {
   "--td-command-surface-hover": "#D8DCE3",
   "--td-foreground": "#15171A",
   "--td-muted": "#5F6673",
+  "--td-tree-rail": "#4B525E",
+  "--td-panel-foreground": "#525863",
   "--td-border": "rgba(15, 17, 20, 0.12)",
   "--td-glass-fill-top": "rgba(255, 255, 255, 0.82)",
   "--td-glass-fill-bottom": "rgba(244, 245, 248, 0.96)",
@@ -122,6 +129,8 @@ const lightCssVars: Record<string, string> = {
   "--td-graph-node-bg": "#FFFFFF",
   "--td-graph-node-header-agent": "#F4F5F8",
   "--td-graph-node-header-mcp": "#ECEEF2",
+  "--td-project-node-significant": "#eceef3",
+  "--td-project-node-functional": "#FFFFFF",
   "--td-graph-block-bg": "rgba(255, 255, 255, 0.96)",
   "--td-graph-block-border": "rgba(139, 92, 246, 0.28)",
   "--td-graph-wire-active": "rgba(139, 92, 246, 0.72)",
@@ -175,6 +184,8 @@ export const colors = {
   border: cssVar("--td-border"),
   foreground: cssVar("--td-foreground"),
   muted: cssVar("--td-muted"),
+  treeRail: cssVar("--td-tree-rail"),
+  panelForeground: cssVar("--td-panel-foreground"),
   accent: shared.accent,
   error: shared.error,
   errorSoft: shared.errorSoft,
@@ -238,6 +249,11 @@ export const borders = {
   selected: whiteAlpha[14],
   dashed: whiteAlpha[14],
   glass: colors.glassBorder,
+} as const;
+
+export const project = {
+  nodeSignificant: cssVar("--td-project-node-significant"),
+  nodeFunctional: cssVar("--td-project-node-functional"),
 } as const;
 
 export const graph = {

@@ -37,3 +37,15 @@ export function stopMcpServer(serverId: number) {
 export function isMcpServerRunning(serverId: number) {
   return invoke<boolean>("mcp_is_running", { serverId });
 }
+
+export function getMcpToolPrefs(serverId: number) {
+  return invoke<Record<string, boolean>>("mcp_get_tool_prefs", { serverId });
+}
+
+export function setMcpToolPref(serverId: number, toolName: string, enabled: boolean) {
+  return invoke<boolean>("mcp_set_tool_pref", { serverId, toolName, enabled });
+}
+
+export function replaceMcpToolPrefs(serverId: number, prefs: Record<string, boolean>) {
+  return invoke<boolean>("mcp_replace_tool_prefs", { serverId, prefs });
+}

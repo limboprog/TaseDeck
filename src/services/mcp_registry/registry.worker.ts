@@ -15,6 +15,7 @@ import {
 import type { McpListResult, McpServerEntry, McpSourceId } from "./types";
 
 const CATALOG_SOURCE: McpSourceId = "all";
+const BROWSE_SESSION_KEY = `${CATALOG_SOURCE}:__browse__`;
 const PAGE_SIZE = MARKET_PAGE_SIZE;
 const SEARCH_DEBOUNCE_MS = 200;
 const FIRST_CHAR_DEBOUNCE_MS = 60;
@@ -137,6 +138,56 @@ function sessionKey(source: McpSourceId, search: string) {
   return `${source}:${normalizeSearch(search)}`;
 }
 
+function getBrowseSession(): SearchSession {
+  return (
+    sessions.get(BROWSE_SESSION_KEY) ?? {
+      search: "",
+      servers: [],
+      hasMore: true,
+      loaded: false,
+    }
+  );
+}
+
+function setBrowseSession(session: SearchSession) {
+  sessions.set(BROWSE_SESSION_KEY, session);
+}
+
+function clearBrowseSession() {
+  sessions.delete(BROWSE_SESSION_KEY);
+}
+
+function appendBrowsePage(
+  incoming: McpServerEntry[],
+  nextCursor?: string,
+): SearchSession {
+  const existing = getBrowseSession();
+  const session: SearchSession = {
+    search: "",
+    servers: mergeUniqueEntries(existing.servers, incoming),
+    nextCursor,
+    hasMore: Boolean(nextCursor),
+    loaded: true,
+  };
+  setBrowseSession(session);
+  return session;
+}
+
+function replaceBrowsePage(
+  incoming: McpServerEntry[],
+  nextCursor?: string,
+): SearchSession {
+  const session: SearchSession = {
+    search: "",
+    servers: [...incoming],
+    nextCursor,
+    hasMore: Boolean(nextCursor),
+    loaded: true,
+  };
+  setBrowseSession(session);
+  return session;
+}
+
 function getCatalogSession(search: string) {
   return sessions.get(sessionKey(CATALOG_SOURCE, search));
 }
@@ -150,42 +201,6 @@ function applySourceFilter(
   source: McpSourceId,
 ): McpServerEntry[] {
   return filterByConnection(entries, source);
-}
-
-function getAncestorSession(search: string): SearchSession | null {
-  const normalized = normalizeSearch(search);
-  if (!normalized) {
-    return null;
-  }
-
-  const exact = getCatalogSession(search);
-  if (exact) {
-    return exact;
-  }
-
-  for (let length = normalized.length - 1; length >= 1; length -= 1) {
-    const ancestor = normalized.slice(0, length);
-    const session = sessions.get(sessionKey(CATALOG_SOURCE, ancestor));
-    if (session?.servers.length) {
-      return session;
-    }
-  }
-
-  return null;
-}
-
-function getAncestorEntries(search: string): McpServerEntry[] | null {
-  return getAncestorSession(search)?.servers ?? null;
-}
-
-function shouldUseCachedSession(session: SearchSession | undefined) {
-  if (!session?.loaded) {
-    return false;
-  }
-  if (session.servers.length > 0) {
-    return true;
-  }
-  return !session.hasMore;
 }
 
 function pageNeedsMoreData(page: number, view: ReturnType<typeof buildView>) {
@@ -213,11 +228,13 @@ function replacePage(
   nextCursor?: string,
 ): SearchSession {
   const normalized = normalizeSearch(search);
+  if (!normalized) {
+    return replaceBrowsePage(serversList, nextCursor);
+  }
+
   const session: SearchSession = {
     search: normalized,
-    servers: normalized
-      ? filterAndSortEntries(serversList, search)
-      : [...serversList],
+    servers: filterAndSortEntries(serversList, search),
     nextCursor,
     hasMore: Boolean(nextCursor),
     loaded: true,
@@ -231,13 +248,41 @@ function appendPage(
   incoming: McpServerEntry[],
   nextCursor?: string,
 ): SearchSession {
+  const normalized = normalizeSearch(search);
+  if (!normalized) {
+    return appendBrowsePage(incoming, nextCursor);
+  }
+
   const existing = getCatalogSession(search);
   const merged = mergeUniqueEntries(existing?.servers ?? [], incoming);
-  return replacePage(search, merged, nextCursor);
+  const session: SearchSession = {
+    search: normalized,
+    servers: filterAndSortEntries(merged, search),
+    nextCursor,
+    hasMore: Boolean(nextCursor),
+    loaded: true,
+  };
+  setCatalogSession(search, session);
+  return session;
 }
 
 function clearCatalogSearch(search: string) {
   sessions.delete(sessionKey(CATALOG_SOURCE, search));
+}
+
+function activeSessionForQuery(query: string): SearchSession {
+  const normalized = normalizeSearch(query);
+  if (!normalized) {
+    return getBrowseSession();
+  }
+  return (
+    getCatalogSession(query) ?? {
+      search: normalized,
+      servers: [],
+      hasMore: true,
+      loaded: false,
+    }
+  );
 }
 
 function resetPageWindowCache() {
@@ -295,26 +340,27 @@ function buildView(
   session?: SearchSession;
 } {
   const normalized = normalizeSearch(query);
-  const exact = getCatalogSession(query);
 
   if (!normalized) {
-    if (exact) {
+    const browse = getBrowseSession();
+    if (browse.loaded || browse.servers.length > 0) {
       return {
-        servers: applySourceFilter(exact.servers, source),
-        hasMore: exact.hasMore,
+        servers: applySourceFilter(browse.servers, source),
+        hasMore: browse.hasMore,
         isCachePreview: false,
-        session: exact,
+        session: browse,
       };
     }
 
     return {
       servers: [],
-      hasMore: false,
+      hasMore: true,
       isCachePreview: false,
     };
   }
 
-  if (exact) {
+  const exact = getCatalogSession(query);
+  if (exact && (exact.loaded || exact.servers.length > 0)) {
     return {
       servers: applySourceFilter(exact.servers, source),
       hasMore: exact.hasMore,
@@ -323,22 +369,10 @@ function buildView(
     };
   }
 
-  const ancestorEntries = getAncestorEntries(query);
-  if (!ancestorEntries) {
-    return {
-      servers: [],
-      hasMore: false,
-      isCachePreview: false,
-    };
-  }
-
-  const filtered = filterAndSortEntries(ancestorEntries, query);
-  const ancestorSession = getAncestorSession(query);
-
   return {
-    servers: applySourceFilter(filtered, source),
-    hasMore: ancestorSession?.hasMore ?? filtered.length > 0,
-    isCachePreview: filtered.length > 0,
+    servers: [],
+    hasMore: true,
+    isCachePreview: false,
   };
 }
 
@@ -422,13 +456,14 @@ async function ensureFilteredCount(
     guard < 40
   ) {
     guard += 1;
-    const prevLen = view.servers.length;
     const remaining = minCount - view.servers.length;
     const batchLimit = Math.min(
       MARKET_FETCH_BATCH_MAX,
       Math.max(PAGE_SIZE, remaining),
     );
-    const mode = getCatalogSession(currentQuery) ? "append" : "reset";
+    const active = activeSessionForQuery(currentQuery);
+    const mode = active.loaded && active.servers.length > 0 ? "append" : "reset";
+    const prevSessionLen = active.servers.length;
     const fetched = await fetchFromNetwork(searchId, currentQuery, mode, {
       limit: batchLimit,
     });
@@ -436,17 +471,22 @@ async function ensureFilteredCount(
       break;
     }
 
-    const nextView = buildView(currentQuery, currentSource);
-    if (nextView.servers.length === prevLen && nextView.hasMore) {
-      const session = getCatalogSession(currentQuery);
-      if (session) {
-        setCatalogSession(currentQuery, { ...session, hasMore: false });
+    const nextSessionLen = activeSessionForQuery(currentQuery).servers.length;
+    view = buildView(currentQuery, currentSource);
+    if (nextSessionLen === prevSessionLen && view.hasMore) {
+      const normalized = normalizeSearch(currentQuery);
+      if (normalized) {
+        const session = getCatalogSession(currentQuery);
+        if (session) {
+          setCatalogSession(currentQuery, { ...session, hasMore: false });
+        }
+      } else {
+        const browse = getBrowseSession();
+        setBrowseSession({ ...browse, hasMore: false });
       }
       view = buildView(currentQuery, currentSource);
       break;
     }
-
-    view = nextView;
   }
 
   return view;
@@ -522,7 +562,9 @@ function scheduleFetch(searchId: number) {
   fetchTimer = setTimeout(() => {
     fetchTimer = undefined;
     void (async () => {
-      await fetchFromNetwork(searchId, currentQuery, "reset");
+      const active = activeSessionForQuery(currentQuery);
+      const mode = active.loaded && active.servers.length > 0 ? "append" : "reset";
+      await fetchFromNetwork(searchId, currentQuery, mode);
       if (searchId !== latestSearchId) {
         return;
       }
@@ -562,13 +604,21 @@ async function fetchFromNetwork(
   }
 
   try {
-    const existing = getCatalogSession(query);
+    const normalized = normalizeSearch(query);
+    if (mode === "reset") {
+      if (normalized) {
+        clearCatalogSearch(query);
+      } else {
+        clearBrowseSession();
+      }
+    }
 
+    const active = activeSessionForQuery(query);
     const result = await requestCatalogPage({
-      search: query,
       source: CATALOG_SOURCE,
-      cursor: mode === "append" ? existing?.nextCursor : undefined,
+      cursor: mode === "append" ? active.nextCursor : undefined,
       limit: options?.limit ?? PAGE_SIZE,
+      search: normalized || undefined,
     });
 
     if (searchId !== latestSearchId) {
@@ -627,27 +677,18 @@ function handleSearch(searchId: number, query: string, source: McpSourceId) {
   }
 
   const view = buildView(query, source);
-  const exactSession = getCatalogSession(query);
-  const normalizedQuery = normalizeSearch(query);
-  const canServeFromCache = Boolean(
-    exactSession && shouldUseCachedSession(exactSession),
-  );
-  const needsExactFetch =
-    normalizedQuery.length > 0 && !exactSession?.loaded;
+  const active = activeSessionForQuery(query);
   const needsFetch =
-    needsExactFetch ||
-    !canServeFromCache ||
-    pageNeedsMoreData(0, view) ||
-    (view.servers.length === 0 && Boolean(exactSession?.hasMore));
+    !active.loaded ||
+    (active.hasMore && active.servers.length < PAGE_SIZE);
 
   emitState(searchId, {
     isCachePreview: view.isCachePreview,
-    loading:
-      needsFetch && (needsExactFetch || view.servers.length === 0),
+    loading: needsFetch && view.servers.length === 0,
     error: null,
   });
 
-  if (canServeFromCache && !needsFetch) {
+  if (active.loaded && !needsFetch) {
     void (async () => {
       await warmPageWindow(searchId, 0);
       void prefetchAdjacentPages(searchId);
@@ -714,6 +755,7 @@ self.onmessage = (event: MessageEvent<RegistryWorkerIn | RegistryWorkerFetchIn>)
     }
     case "REFRESH": {
       clearCatalogSearch(message.query);
+      clearBrowseSession();
       resetPageWindowCache();
       handleSearch(message.searchId, message.query, message.source);
       break;

@@ -1,53 +1,50 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   BsLayoutSidebar,
   GoPerson,
-  IoServerOutline,
-  HiOutlineShoppingBag,
+  IoCubeOutline,
   PiHouse,
-  TbTopologyRing2,
-  HiOutlineSparkles,
-  IoListOutline,
+  LuChartNoAxesColumnIncreasing,
+  PiStackLight,
+  VscSettings,
 } from "../../icons";
 import { Button, Text, XStack, YStack } from "tamagui";
+import { DASHBOARD_ENABLED, PRESETS_ENABLED } from "../../navigation/featureFlags";
+import { openGraphContextMenu } from "../../features/workspace/showNativeContextMenu";
+import {
+  defaultProjectsPageSession,
+  PROJECTS_PAGE_SESSION_KEY,
+  readPageSession,
+  writePageSession,
+} from "../../session/appSession";
+import {
+  createProjectRecord,
+  folderBaseName,
+  listProjectRecords,
+  pickProjectDirectory,
+  PROJECTS_CHANGED_EVENT,
+  type Project,
+} from "../../services/projects";
 import { colors, tamaguiSurfaces } from "../../theme";
-
-const SIDEBAR_WIDTH_EXPANDED = 200;
-const SIDEBAR_WIDTH_COLLAPSED = 56;
-const SIDEBAR_PAD_X_EXPANDED = 12;
-const SIDEBAR_PAD_X_COLLAPSED = 8;
-/** Keep icons on the same X axis in expanded and collapsed modes (no center detour). */
-const SIDEBAR_ICON_LEFT = 19;
-/** Extra space between collapse toggle and main content when sidebar is expanded. */
-const COLLAPSE_TOGGLE_RIGHT_GUTTER = 12;
-
-function sidebarPadX(collapsed: boolean) {
-  return collapsed ? SIDEBAR_PAD_X_COLLAPSED : SIDEBAR_PAD_X_EXPANDED;
-}
-
-function iconButtonPadLeft(collapsed: boolean) {
-  return SIDEBAR_ICON_LEFT - sidebarPadX(collapsed);
-}
-
-/** Slide collapse toggle from icon column to the right (content-local coords). */
-function collapseToggleTranslateX(collapsed: boolean) {
-  if (collapsed) {
-    return 0;
-  }
-  const padX = SIDEBAR_PAD_X_EXPANDED;
-  const contentWidth = SIDEBAR_WIDTH_EXPANDED - 2 * padX;
-  const baseLeft = iconButtonPadLeft(false);
-  const targetLeft = contentWidth - 18 - COLLAPSE_TOGGLE_RIGHT_GUTTER;
-  return targetLeft - baseLeft;
-}
+import { SidebarAgentAddButton } from "./SidebarAgentAddButton";
+import { SidebarNavGroup } from "./SidebarNavGroup";
+import { SidebarNavSubItem } from "./SidebarNavSubItem";
+import {
+  SIDEBAR_NAV_ITEM_GAP,
+  SIDEBAR_NAV_ITEM_PY,
+  SIDEBAR_WIDTH_COLLAPSED,
+  SIDEBAR_WIDTH_EXPANDED,
+  collapseToggleTranslateX,
+  iconButtonPadLeft,
+  sidebarPadX,
+} from "./sidebarStyles";
 
 export type NavId =
   | "dashboard"
-  | "workspace"
+  | "presets"
   | "usage"
-  | "agents"
+  | "projects"
   | "mcp"
-  | "market"
   | "profile";
 
 type NavItem = {
@@ -57,12 +54,14 @@ type NavItem = {
 };
 
 const mainNavItems: NavItem[] = [
-  { id: "dashboard", label: "Dashboard", icon: <PiHouse size={18} /> },
-  { id: "workspace", label: "Topology", icon: <TbTopologyRing2 size={18} /> },
-  { id: "usage", label: "Usage", icon: <IoListOutline size={18} /> },
-  { id: "agents", label: "Agents", icon: <HiOutlineSparkles size={18} /> },
-  { id: "mcp", label: "MCP", icon: <IoServerOutline size={18} /> },
-  { id: "market", label: "Market", icon: <HiOutlineShoppingBag size={18} /> },
+  ...(DASHBOARD_ENABLED
+    ? [{ id: "dashboard" as const, label: "Dashboard", icon: <PiHouse size={18} /> }]
+    : []),
+  ...(PRESETS_ENABLED
+    ? [{ id: "presets" as const, label: "Presets", icon: <VscSettings size={18} /> }]
+    : []),
+  { id: "usage", label: "Usage", icon: <LuChartNoAxesColumnIncreasing size={18} /> },
+  { id: "mcp", label: "MCP", icon: <PiStackLight size={18} /> },
 ];
 
 const profileItem: NavItem = {
@@ -73,7 +72,10 @@ const profileItem: NavItem = {
 
 type SidebarProps = {
   activeId: NavId;
+  selectedProjectId: string | null;
   onNavigate: (id: NavId) => void;
+  onSelectProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 };
@@ -96,7 +98,7 @@ function NavButton({
     <Button
       unstyled
       width="100%"
-      py={8}
+      py={SIDEBAR_NAV_ITEM_PY}
       pl={iconButtonPadLeft(collapsed)}
       pr={collapsed ? iconButtonPadLeft(collapsed) : 10}
       rounded={8}
@@ -138,9 +140,104 @@ function NavButton({
   );
 }
 
+function ProjectsNavGroup({
+  activeId,
+  selectedProjectId,
+  collapsed,
+  onSelectProject,
+  onDeleteProject,
+}: {
+  activeId: NavId;
+  selectedProjectId: string | null;
+  collapsed: boolean;
+  onSelectProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
+}) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [expanded, setExpanded] = useState(
+    () =>
+      readPageSession(PROJECTS_PAGE_SESSION_KEY, defaultProjectsPageSession()).projectsNavExpanded ??
+      true,
+  );
+
+  const loadProjects = useCallback(async () => {
+    try {
+      setProjects(await listProjectRecords());
+    } catch {
+      setProjects([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadProjects();
+    const onChanged = () => {
+      void loadProjects();
+    };
+    window.addEventListener(PROJECTS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(PROJECTS_CHANGED_EVENT, onChanged);
+  }, [loadProjects]);
+
+  useEffect(() => {
+    if (activeId === "projects" && selectedProjectId != null) {
+      setExpanded(true);
+    }
+  }, [activeId, selectedProjectId]);
+
+  const handleExpandedChange = (next: boolean) => {
+    setExpanded(next);
+    const session = readPageSession(PROJECTS_PAGE_SESSION_KEY, defaultProjectsPageSession());
+    writePageSession(PROJECTS_PAGE_SESSION_KEY, { ...session, projectsNavExpanded: next });
+  };
+
+  const handleAddProject = async () => {
+    const picked = (await pickProjectDirectory())?.trim() ?? "";
+    if (!picked) {
+      return;
+    }
+    const created = await createProjectRecord({
+      name: folderBaseName(picked),
+      folderPath: picked,
+    });
+    onSelectProject(created.id);
+  };
+
+  return (
+    <SidebarNavGroup
+      title="Projects"
+      expanded={expanded}
+      onExpandedChange={handleExpandedChange}
+      collapsed={collapsed}
+    >
+      {projects.map((project) => (
+        <SidebarNavSubItem
+          key={project.id}
+          label={project.name}
+          leading={<IoCubeOutline size={18} color={project.iconColor} />}
+          active={activeId === "projects" && selectedProjectId === project.id}
+          collapsed={collapsed}
+          onPress={() => onSelectProject(project.id)}
+          onContextMenu={(event) => {
+            openGraphContextMenu(event, [
+              {
+                id: "delete",
+                label: "Delete",
+                onSelect: () => onDeleteProject(project.id),
+              },
+            ]);
+          }}
+        />
+      ))}
+      <SidebarAgentAddButton collapsed={collapsed} onPress={() => void handleAddProject()} />
+    </SidebarNavGroup>
+  );
+}
+
 export function Sidebar({
   activeId,
+  selectedProjectId,
   onNavigate,
+  onSelectProject,
+  onDeleteProject,
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
@@ -197,7 +294,7 @@ export function Sidebar({
           </button>
         </XStack>
 
-        <YStack gap={2} width="100%" items="stretch">
+        <YStack gap={SIDEBAR_NAV_ITEM_GAP} width="100%" items="stretch">
           {mainNavItems.map((item) => (
             <NavButton
               key={item.id}
@@ -207,6 +304,14 @@ export function Sidebar({
               collapsed={collapsed}
             />
           ))}
+
+          <ProjectsNavGroup
+            activeId={activeId}
+            selectedProjectId={selectedProjectId}
+            collapsed={collapsed}
+            onSelectProject={onSelectProject}
+            onDeleteProject={onDeleteProject}
+          />
         </YStack>
       </YStack>
 

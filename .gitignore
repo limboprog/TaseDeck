@@ -1,5 +1,27 @@
-# Logs
-logs
+# --- Dependencies & build output ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# --- Rust / Tauri ---
+/target/
+src-tauri/target/
+src-tauri/gen/
+
+# --- Frontend tooling cache ---
+.tamagui/
+.vite/
+.vite-temp/
+
+# --- Logs ---
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,18 +29,67 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# --- OS ---
+.DS_Store
+Thumbs.db
 
-# Editor directories and files
+# --- Editor / IDE ---
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# --- Python (optional local backend) ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- Local databases ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Generated MCP configs (topology Play writes these locally) ---
+/mcp.json
+/mcp copy*.json
+
+# --- Personal / internal notes (not part of the shipped app) ---
+note.md
+plan.md
+web/note.md
+
+# --- Test run artifacts ---
+test/result.json
+test/tests.json
+
+# --- Marketing website (separate Next.js project, not the desktop app) ---
+/web/
+
+# --- Optional Python catalog API (not bundled in Tauri) ---
+/backend/
+
+# --- Local MCP test harness (dev only) ---
+/test_mcp/
+
+# --- Market probe CLI artifacts ---
+/test/
+
+# --- Local TaseDeck proxy/sidecar dev mirror (generated in real projects) ---
+/.tasedeck/
+
+# --- IDE / agent tool configs at repo root ---
+/.cursor/
+opencode.json
+
+# --- Large local media caches (if copied into repo during dev) ---
+*.mov

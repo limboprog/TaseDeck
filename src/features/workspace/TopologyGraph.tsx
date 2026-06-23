@@ -6,29 +6,27 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { InlineLoader } from "../../components/InlineLoader";
-import { Text, XStack, YStack } from "tamagui";
+import { Text, YStack } from "tamagui";
 import { useInstalledMcpServers } from "../../services/mcp_installed";
-import {
-  MCP_INSTALLED_EVENT,
-  MCP_REMOVED_EVENT,
-} from "../../services/mcp_installed/types";
+import { canAttemptMcpTools } from "../../services/mcp_installed/configState";
 import {
   AGENTS_CHANGED_EVENT,
-  listAgentRecords,
   type AgentRecord,
 } from "../../services/agents/recordsApi";
-import { listGraphPlaceableMcpIds } from "../../services/topology/graphApi";
+import {
+  listGraphPlaceableAgents,
+} from "../../services/topology/graphApi";
 import {
   createId,
   type Topology,
   type TopologyBlock,
   type TopologyEdge,
   type TopologyNode,
-  type TopologyNodeType,
 } from "../../services/topology";
 import { useGraphServerSync } from "../../services/topology/useGraphServerSync";
 import { blocks as themeBlocks, colors, graph } from "../../theme";
+import { PaneToolbar, PaneView, PANE_ROW_RADIUS, paneGraphShellStyle, paneGraphToolbarStyle } from "../../components/pane";
+import { McpPanel } from "../mcp/McpPanel";
 import { TopologyAddControl } from "./TopologyAddControl";
 import {
   collectMcpsFromSelectionRect,
@@ -61,7 +59,7 @@ import {
   hitTestWireTarget,
   type Point,
 } from "./graphGeometry";
-import { PickNodeModal } from "./PickNodeModal";
+import { GRAPH_SERVER_ROW_HEIGHT, NODE_WIDTH } from "./graphLayoutConstants";
 import {
   computeFitViewport,
   loadTopologyViewport,
@@ -108,10 +106,22 @@ function wheelZoomFactor(deltaY: number) {
   return Math.exp(-deltaY * ZOOM_WHEEL_INTENSITY);
 }
 
-function defaultPosition(index: number) {
-  const column = index % 3;
-  const row = Math.floor(index / 3);
-  return { x: 80 + column * 220, y: 80 + row * 120 };
+function nodePositionAtWorldPoint(point: Point): Point {
+  return {
+    x: point.x - NODE_WIDTH / 2,
+    y: point.y - GRAPH_SERVER_ROW_HEIGHT / 2,
+  };
+}
+
+function getViewportCenterWorld(
+  canvas: HTMLDivElement,
+  pan: Point,
+  zoom: number,
+): Point {
+  return {
+    x: (canvas.clientWidth / 2 - pan.x) / zoom,
+    y: (canvas.clientHeight / 2 - pan.y) / zoom,
+  };
 }
 
 export function TopologyGraph({
@@ -132,8 +142,8 @@ export function TopologyGraph({
   const movedRef = useRef(false);
   const panRef = useRef<Point>({ x: 0, y: 0 });
   const zoomRef = useRef(1);
+  const addPlacementRef = useRef<Point | null>(null);
 
-  const [pickModalType, setPickModalType] = useState<TopologyNodeType | null>(null);
   const [groupToolActive, setGroupToolActive] = useState(false);
   const [marquee, setMarquee] = useState<{ start: Point; end: Point } | null>(null);
   const marqueeRef = useRef<{ start: Point; end: Point } | null>(null);
@@ -146,62 +156,40 @@ export function TopologyGraph({
   const [isPanning, setIsPanning] = useState(false);
   const { servers: installedMcps } = useInstalledMcpServers();
   const [agentRecords, setAgentRecords] = useState<AgentRecord[]>([]);
-  const [placeableMcpIds, setPlaceableMcpIds] = useState<number[]>([]);
-  const [placeableLoading, setPlaceableLoading] = useState(true);
 
   const placeableAgentIdSet = useMemo(
     () => new Set(agentRecords.map((agent) => agent.id)),
     [agentRecords],
   );
-  const placeableMcpIdSet = useMemo(() => new Set(placeableMcpIds), [placeableMcpIds]);
 
-  const graphPlaceableMcps = useMemo(
-    () => installedMcps.filter((server) => placeableMcpIdSet.has(server.id)),
-    [installedMcps, placeableMcpIdSet],
+  const graphPickerMcps = useMemo(
+    () => installedMcps.filter((server) => canAttemptMcpTools(server)),
+    [installedMcps],
   );
 
-  const refreshPlaceableNodes = useCallback(() => {
-    setPlaceableLoading(true);
-    void Promise.all([listAgentRecords(), listGraphPlaceableMcpIds()])
-      .then(([agents, mcpIds]) => {
-        setAgentRecords(agents);
-        setPlaceableMcpIds(mcpIds);
-      })
-      .catch(() => {
-        setAgentRecords([]);
-        setPlaceableMcpIds([]);
-      })
-      .finally(() => setPlaceableLoading(false));
+  const runnableMcpIdSet = useMemo(
+    () => new Set(graphPickerMcps.map((server) => server.id)),
+    [graphPickerMcps],
+  );
+
+  const refreshPlaceableAgents = useCallback(() => {
+    void listGraphPlaceableAgents()
+      .then((agents) => setAgentRecords(agents))
+      .catch(() => setAgentRecords([]));
   }, []);
 
   useEffect(() => {
     if (!workspaceActive) {
       return;
     }
-    refreshPlaceableNodes();
-  }, [workspaceActive, refreshPlaceableNodes, topology.id]);
+    refreshPlaceableAgents();
+  }, [workspaceActive, refreshPlaceableAgents]);
 
   useEffect(() => {
-    if (pickModalType === "agent") {
-      refreshPlaceableNodes();
-    }
-  }, [pickModalType, refreshPlaceableNodes]);
-
-  useEffect(() => {
-    const onAgentsChanged = () => refreshPlaceableNodes();
+    const onAgentsChanged = () => refreshPlaceableAgents();
     window.addEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
     return () => window.removeEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
-  }, [refreshPlaceableNodes]);
-
-  useEffect(() => {
-    const onMcpChanged = () => refreshPlaceableNodes();
-    window.addEventListener(MCP_INSTALLED_EVENT, onMcpChanged);
-    window.addEventListener(MCP_REMOVED_EVENT, onMcpChanged);
-    return () => {
-      window.removeEventListener(MCP_INSTALLED_EVENT, onMcpChanged);
-      window.removeEventListener(MCP_REMOVED_EVENT, onMcpChanged);
-    };
-  }, [refreshPlaceableNodes]);
+  }, [refreshPlaceableAgents]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -236,7 +224,7 @@ export function TopologyGraph({
   const defaultAgentRecordId = agentRecords[0]?.id;
   const [, setGraphSyncError] = useState<string | null>(null);
 
-  const { syncNow: syncGraphNow, hydrating: graphHydrating } = useGraphServerSync({
+  const { syncNow: syncGraphNow } = useGraphServerSync({
     clientId: topology.id,
     name: topology.name,
     nodes: topology.nodes,
@@ -411,44 +399,94 @@ export function TopologyGraph({
     return () => canvas.removeEventListener("wheel", onWheel);
   }, [zoomAtScreenPoint]);
 
-  const handlePickNodeType = (type: TopologyNodeType) => {
-    setPickModalType(type);
-  };
+  useEffect(() => {
+    addPlacementRef.current = null;
+  }, [topology.id]);
 
-  const finishPickAgent = (agent: AgentRecord) => {
-    const index = topology.nodes.length;
-    const position = defaultPosition(index);
-    addNode({
-      id: createId(),
-      type: "agent",
-      name: agent.name,
-      agentKind: agent.kind,
-      agentRecordId: agent.id,
-      x: position.x,
-      y: position.y,
-      expanded: false,
-    });
-    setPickModalType(null);
-  };
-
-  const finishPickMcp = (server: (typeof installedMcps)[number]) => {
-    if (!placeableMcpIdSet.has(server.id)) {
-      return;
+  const resolveAddPosition = useCallback((): Point => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return nodePositionAtWorldPoint({ x: 0, y: 0 });
     }
 
-    const index = topology.nodes.length;
-    const position = defaultPosition(index);
-    addNode({
-      id: createId(),
-      type: "mcp",
-      name: server.name,
-      mcpServerId: server.id,
-      x: position.x,
-      y: position.y,
-      expanded: false,
-    });
-    setPickModalType(null);
-  };
+    const world =
+      addPlacementRef.current ??
+      getViewportCenterWorld(canvas, panRef.current, zoomRef.current);
+    return nodePositionAtWorldPoint(world);
+  }, []);
+
+  const refreshAddPlacementCenter = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    addPlacementRef.current = getViewportCenterWorld(
+      canvas,
+      panRef.current,
+      zoomRef.current,
+    );
+  }, []);
+
+  const prepareAddMenuPlacement = useCallback(() => {
+    if (addPlacementRef.current === null) {
+      refreshAddPlacementCenter();
+    }
+  }, [refreshAddPlacementCenter]);
+
+  const rememberCanvasPointer = useCallback(
+    (event: PointerEvent | ReactPointerEvent<HTMLDivElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return;
+      }
+      addPlacementRef.current = getCanvasPoint(
+        "nativeEvent" in event ? event.nativeEvent : event,
+        canvas,
+        panRef.current,
+        zoomRef.current,
+      );
+    },
+    [],
+  );
+
+  const finishPickAgent = useCallback(
+    (agent: AgentRecord) => {
+      const position = resolveAddPosition();
+      addNode({
+        id: createId(),
+        type: "agent",
+        name: agent.name,
+        agentKind: agent.kind,
+        agentRecordId: agent.id,
+        x: position.x,
+        y: position.y,
+        expanded: false,
+      });
+      addPlacementRef.current = null;
+    },
+    [addNode, resolveAddPosition],
+  );
+
+  const finishPickMcp = useCallback(
+    (server: (typeof installedMcps)[number]) => {
+      if (!canAttemptMcpTools(server)) {
+        return;
+      }
+
+      const position = resolveAddPosition();
+      addNode({
+        id: createId(),
+        type: "mcp",
+        name: server.name,
+        mcpServerId: server.id,
+        x: position.x,
+        y: position.y,
+        expanded: false,
+      });
+      addPlacementRef.current = null;
+    },
+    [addNode, resolveAddPosition],
+  );
 
   const finalizeMarquee = useCallback(
     (end: Point) => {
@@ -472,7 +510,7 @@ export function TopologyGraph({
         topology.nodes,
         edges,
         placeableAgentIdSet,
-        placeableMcpIdSet,
+        runnableMcpIdSet,
       );
       if (result) {
         updateBlocks(result.blocks);
@@ -484,7 +522,7 @@ export function TopologyGraph({
       blocks,
       edges,
       placeableAgentIdSet,
-      placeableMcpIdSet,
+      runnableMcpIdSet,
       topology.nodes,
       updateBlocks,
       updateEdges,
@@ -601,7 +639,7 @@ export function TopologyGraph({
             nodeById,
             blocksById,
             placeableAgentIdSet,
-            placeableMcpIdSet,
+            runnableMcpIdSet,
           )
             ? hoverTargetId
             : null;
@@ -624,6 +662,8 @@ export function TopologyGraph({
       linkedCountByNode,
       nodeById,
       pan,
+      placeableAgentIdSet,
+      runnableMcpIdSet,
       topology.nodes,
       wireDraft,
       zoom,
@@ -642,7 +682,7 @@ export function TopologyGraph({
         nodeById,
         blocksById,
         placeableAgentIdSet,
-        placeableMcpIdSet,
+        runnableMcpIdSet,
       );
       if (!endpoints) {
         setWireDraft(null);
@@ -670,7 +710,7 @@ export function TopologyGraph({
       });
       setWireDraft(null);
     },
-    [blocksById, nodeById, updateEdges, wireDraft],
+    [blocksById, nodeById, placeableAgentIdSet, runnableMcpIdSet, updateEdges, wireDraft],
   );
 
   const stopGlobalTracking = useCallback(
@@ -739,7 +779,7 @@ export function TopologyGraph({
           nodeById,
           blocksById,
           placeableAgentIdSet,
-          placeableMcpIdSet,
+          runnableMcpIdSet,
         )) {
           finalizeWire(hitId);
         } else {
@@ -753,7 +793,7 @@ export function TopologyGraph({
 
       if (pendingRef.current && !movedRef.current && pendingRef.current.blockId) {
         const block = blocksById.get(pendingRef.current.blockId);
-        if (block && isBlockConfigured(block, nodeById, placeableMcpIdSet)) {
+        if (block && isBlockConfigured(block, nodeById, runnableMcpIdSet)) {
           setWireDraft({
             sourceId: pendingRef.current.blockId,
             cursor: point,
@@ -764,7 +804,7 @@ export function TopologyGraph({
         const sourceNode = nodeById.get(pendingRef.current.nodeId);
         if (
           sourceNode &&
-          isNodeGraphReady(sourceNode, placeableAgentIdSet, placeableMcpIdSet)
+          isNodeGraphReady(sourceNode, placeableAgentIdSet, runnableMcpIdSet)
         ) {
           setWireDraft({
             sourceId: pendingRef.current.nodeId,
@@ -788,6 +828,8 @@ export function TopologyGraph({
       linkedCountByNode,
       nodeById,
       pan,
+      placeableAgentIdSet,
+      runnableMcpIdSet,
       stopGlobalTracking,
       wireDraft,
       zoom,
@@ -845,7 +887,7 @@ export function TopologyGraph({
         nodeById,
         blocksById,
         placeableAgentIdSet,
-        placeableMcpIdSet,
+        runnableMcpIdSet,
       ) &&
         nodeId !== wireDraft.sourceId
       ) {
@@ -898,7 +940,7 @@ export function TopologyGraph({
         nodeById,
         blocksById,
         placeableAgentIdSet,
-        placeableMcpIdSet,
+        runnableMcpIdSet,
       ) &&
         blockId !== wireDraft.sourceId
       ) {
@@ -931,6 +973,8 @@ export function TopologyGraph({
   };
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    rememberCanvasPointer(event);
+
     if (event.button !== 0 || draggingNodeId || draggingBlockId) {
       return;
     }
@@ -1195,7 +1239,7 @@ export function TopologyGraph({
         nodeById,
         blocksById,
         placeableAgentIdSet,
-        placeableMcpIdSet,
+        runnableMcpIdSet,
       );
       if (!endpoints) {
         return null;
@@ -1227,7 +1271,7 @@ export function TopologyGraph({
     displayNodes,
     nodeById,
     placeableAgentIdSet,
-    placeableMcpIdSet,
+    runnableMcpIdSet,
     wireDraft,
   ]);
 
@@ -1246,57 +1290,50 @@ export function TopologyGraph({
   const dotGridStep = themeBlocks.graphDotGridStep;
   const dotGridWorldSpan = 24000;
   const dotGridWorldOrigin = -dotGridWorldSpan / 2;
-  const graphLoading = placeableLoading || graphHydrating;
 
   return (
-    <YStack flex={1} minH={0} minW={0} overflow="hidden" bg={colors.page} position="relative">
-      <XStack
-        gap={8}
-        items="flex-start"
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 12,
-          zIndex: 20,
-          pointerEvents: "none",
-          alignItems: "flex-start",
-        }}
-      >
-        <div style={{ pointerEvents: "auto", flexShrink: 0, alignSelf: "flex-start" }}>
-          <WorkspaceToolbar
-            groupToolActive={groupToolActive}
-            onToggleGroupTool={() => {
-              setGroupToolActive((active) => !active);
-              setMarquee(null);
-              marqueeRef.current = null;
-            }}
-          />
-        </div>
-
-        <div style={{ pointerEvents: "auto", flexShrink: 0, alignSelf: "flex-start" }}>
-          <TopologyAddControl onPickType={handlePickNodeType} />
-        </div>
-      </XStack>
-
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          position: "relative",
-          overflow: "hidden",
-        }}
-      >
-          {pickModalType ? (
-            <PickNodeModal
-              type={pickModalType}
-              installedMcps={graphPlaceableMcps}
-              agentRecords={agentRecords}
+    <McpPanel
+      flex={1}
+      minH={0}
+      minW={0}
+      p={0}
+      overflow="hidden"
+      rounded={PANE_ROW_RADIUS}
+      style={paneGraphShellStyle()}
+    >
+      <PaneView
+        flex={1}
+        gap={0}
+        bg={colors.page}
+        toolbar={
+          <PaneToolbar style={paneGraphToolbarStyle()}>
+            <WorkspaceToolbar
+              groupToolActive={groupToolActive}
+              onToggleGroupTool={() => {
+                setGroupToolActive((active) => !active);
+                setMarquee(null);
+                marqueeRef.current = null;
+              }}
+            />
+            <TopologyAddControl
+              agents={agentRecords}
+              mcps={graphPickerMcps}
               onPickAgent={finishPickAgent}
               onPickMcp={finishPickMcp}
-              onClose={() => setPickModalType(null)}
+              onMenuOpen={prepareAddMenuPlacement}
             />
-          ) : null}
-
+          </PaneToolbar>
+        }
+      >
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            position: "relative",
+            overflow: "hidden",
+            background: colors.page,
+          }}
+        >
           <div
             ref={canvasRef}
             className="topology-canvas"
@@ -1506,19 +1543,8 @@ export function TopologyGraph({
               </YStack>
             ) : null}
           </div>
-      </div>
-
-      {graphLoading ? (
-        <YStack
-          position="absolute"
-          items="center"
-          justify="center"
-          pointerEvents="none"
-          style={{ inset: 0, zIndex: 50, background: "rgba(244, 245, 248, 0.72)" }}
-        >
-          <InlineLoader label="Loading topology…" minHeight={48} />
-        </YStack>
-      ) : null}
-    </YStack>
+        </div>
+      </PaneView>
+    </McpPanel>
   );
 }

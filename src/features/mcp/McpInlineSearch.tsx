@@ -1,6 +1,10 @@
-import { Input, XStack } from "tamagui";
+import { Input } from "tamagui";
 import { IoSearch } from "../../icons";
-import { borders, colors, tamaguiSurfaces } from "../../theme";
+import {
+  PANE_TOOLBAR_ICON_SIZE,
+  paneToolbarSearchShellStyle,
+} from "../../components/pane/paneStyles";
+import { colors } from "../../theme";
 
 type McpInlineSearchProps = {
   value: string;
@@ -17,22 +21,16 @@ export function McpInlineSearch({
   flex,
 }: McpInlineSearchProps) {
   return (
-    <XStack
-      flex={flex}
-      shrink={0}
-      width={flex === undefined ? "100%" : undefined}
-      minW={0}
-      items="center"
-      gap={8}
-      px={10}
-      height={36}
-      rounded={8}
-      borderWidth={1}
-      borderColor={tamaguiSurfaces.controlBorder}
-      bg={tamaguiSurfaces.controlBg}
-      focusWithinStyle={{ borderColor: borders.focus }}
+    <div
+      style={{
+        ...paneToolbarSearchShellStyle(),
+        flex: flex === undefined ? undefined : flex,
+        width: flex === undefined ? "100%" : undefined,
+        flexShrink: 0,
+      }}
+      className="mcp-inline-search"
     >
-      <IoSearch size={15} color={colors.muted} />
+      <IoSearch size={15} color={colors.muted} aria-hidden />
       <Input
         flex={1}
         unstyled
@@ -43,12 +41,12 @@ export function McpInlineSearch({
         placeholderTextColor={colors.muted as never}
         fontSize={13}
         fontWeight={400}
-        height={34}
+        height={PANE_TOOLBAR_ICON_SIZE - 2}
         borderWidth={0}
         background="transparent"
         focusStyle={{ outlineWidth: 0 }}
-        style={{ outline: "none" }}
+        style={{ outline: "none", minWidth: 0 }}
       />
-    </XStack>
+    </div>
   );
 }

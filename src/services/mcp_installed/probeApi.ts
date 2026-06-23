@@ -7,6 +7,14 @@ export type McpProbeResult = {
 
 export type McpProbeOperation = "initialize" | "tools_list";
 
-export function probeMcpOperation(serverId: number, operation: McpProbeOperation) {
-  return invoke<McpProbeResult>("mcp_probe_operation", { serverId, operation });
+export function probeMcpOperation(
+  serverId: number,
+  operation: McpProbeOperation,
+  options?: { recordUsage?: boolean },
+) {
+  return invoke<McpProbeResult>("mcp_probe_operation", {
+    serverId,
+    operation,
+    recordUsage: options?.recordUsage ?? false,
+  });
 }

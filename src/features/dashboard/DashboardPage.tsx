@@ -262,7 +262,7 @@ function BrowseMarketBlock({ onSearch }: { onSearch: (query: string) => void }) 
     >
       <button
         type="button"
-        aria-label="Search market"
+        aria-label="Search servers"
         onClick={submit}
         style={{
           display: "flex",
@@ -287,7 +287,7 @@ function BrowseMarketBlock({ onSearch }: { onSearch: (query: string) => void }) 
             submit();
           }
         }}
-        placeholder="browse market"
+        placeholder="browse servers"
         style={{
           flex: 1,
           minWidth: 0,
@@ -422,16 +422,18 @@ export function DashboardPage({ dashboardActive = true, onNavigate }: DashboardP
         ...defaultWorkspacePageSession(),
         selectedTopologyId: topologyId,
       });
-      onNavigate("workspace");
+      onNavigate("presets");
     },
     [onNavigate],
   );
 
-  const browseMarket = useCallback(
+  const browseServers = useCallback(
     (query: string) => {
       initRegistryWorker();
       registrySearch(query);
-      onNavigate("market");
+      const stored = readPageSession(MCP_PAGE_SESSION_KEY, defaultMcpPageSession());
+      writePageSession(MCP_PAGE_SESSION_KEY, { ...stored, search: query });
+      onNavigate("mcp");
     },
     [onNavigate],
   );
@@ -560,7 +562,7 @@ export function DashboardPage({ dashboardActive = true, onNavigate }: DashboardP
                 Use any agent
               </Text>
             )}
-            <AccentButton label="Add agent" onPress={() => onNavigate("agents")} />
+            <AccentButton label="Add project" onPress={() => onNavigate("projects")} />
           </McpPanel>
 
           <McpPanel flex={1} minW={280} p={16} gap={14}>
@@ -580,7 +582,7 @@ export function DashboardPage({ dashboardActive = true, onNavigate }: DashboardP
                 Install MCP servers from the catalog in one click
               </Text>
             )}
-            <AccentButton label="Market" onPress={() => onNavigate("market")} />
+            <AccentButton label="Browse servers" onPress={() => onNavigate("mcp")} />
           </McpPanel>
         </XStack>
 
@@ -597,7 +599,7 @@ export function DashboardPage({ dashboardActive = true, onNavigate }: DashboardP
               Configurate your own topology
             </Text>
           ) : null}
-          <AccentLink label="Create topology" onPress={() => onNavigate("workspace")} />
+          <AccentLink label="Create preset" onPress={() => onNavigate("presets")} />
         </McpPanel>
 
         <McpPanel p={16} gap={14} items="flex-start">
@@ -659,7 +661,7 @@ export function DashboardPage({ dashboardActive = true, onNavigate }: DashboardP
         <McpPanel p={16} gap={12} items="flex-start">
           <CardHeading>Quick actions</CardHeading>
           <XStack gap={10} items="center" flexWrap="wrap">
-            <BrowseMarketBlock onSearch={browseMarket} />
+            <BrowseMarketBlock onSearch={browseServers} />
             <MarketCardButton label="Add MCP config" onPress={openAddMcpConfig} />
           </XStack>
         </McpPanel>

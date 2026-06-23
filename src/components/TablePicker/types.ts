@@ -29,6 +29,7 @@ export type TablePickerSearchProps<T extends string = string> = {
   autoFocus?: boolean;
   icon?: ReactNode;
   inputStyle?: React.CSSProperties;
+  renderItem?: (props: TablePickerItemRenderProps<T>) => ReactNode;
 };
 
 export type TablePickerSelectProps<T extends string = string> = {

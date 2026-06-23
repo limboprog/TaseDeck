@@ -254,7 +254,7 @@ function EnvVariablesTable({
 
 export function SectionLabel({ children }: { children: string }) {
   return (
-    <Text color={colors.muted} fontSize={11} fontWeight="500" select="none">
+    <Text color={colors.foreground} fontSize={11} fontWeight="600" select="none">
       {children}
     </Text>
   );

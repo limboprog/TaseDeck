@@ -18,6 +18,7 @@ export function McpOAuthSignInOverlay({
   onAuthenticated,
 }: McpOAuthSignInOverlayProps) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -31,11 +32,14 @@ export function McpOAuthSignInOverlay({
 
   const handleOpenPage = async () => {
     setBusy(true);
+    setError(null);
     try {
       await startMcpOAuthSignIn(challenge.serverId);
       onAuthenticated?.();
-    } catch {
-      // Keep overlay open; user can retry or close.
+    } catch (signInError) {
+      const message =
+        signInError instanceof Error ? signInError.message : "OAuth sign-in failed";
+      setError(message);
     } finally {
       setBusy(false);
     }
@@ -105,6 +109,20 @@ export function McpOAuthSignInOverlay({
                 Please sign in to continue
               </span>
             </XStack>
+
+            {error ? (
+              <p
+                style={{
+                  margin: "0 0 12px",
+                  color: colors.error,
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  wordBreak: "break-word",
+                }}
+              >
+                {error}
+              </p>
+            ) : null}
 
             <button
               type="button"

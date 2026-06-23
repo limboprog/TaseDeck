@@ -8,6 +8,7 @@ import {
   initRegistryWorker,
   MARKET_PAGE_SIZE,
   registrySearch,
+  entryKey,
   type McpServerEntry,
   useMcpRegistry,
 } from "../../services/mcp_registry";
@@ -32,6 +33,7 @@ import { colors, surfaces } from "../../theme";
 import { McpServerDetailPage } from "./McpServerDetailPage";
 import { McpSourceTabs } from "./McpSourceTabs";
 import { McpRegistryGrid } from "./McpRegistryGrid";
+import { clampScrollParentAndRevealAnchor } from "./detailPanelScroll";
 
 const EMPTY_MESSAGES = {
   all: "No servers found in the official registry.",
@@ -85,6 +87,36 @@ export function McpRegistryPage({ marketActive = true }: McpRegistryPageProps) {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [page]);
+
+  const searchQuery = query.trim();
+  const firstResultKey = pageServers[0] ? entryKey(pageServers[0]) : null;
+
+  useEffect(() => {
+    if (!searchQuery) {
+      return;
+    }
+    if (loading && pageServers.length === 0) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const scrollEl = scrollRef.current;
+        if (!scrollEl || !firstResultKey) {
+          scrollEl?.scrollTo({ top: 0, behavior: "auto" });
+          return;
+        }
+        const card = scrollEl.querySelector(
+          `[data-registry-entry-key="${CSS.escape(firstResultKey)}"]`,
+        );
+        if (card instanceof HTMLElement) {
+          clampScrollParentAndRevealAnchor(card);
+        } else {
+          scrollEl.scrollTo({ top: 0, behavior: "auto" });
+        }
+      });
+    });
+  }, [firstResultKey, loading, page, pageServers.length, searchQuery]);
 
   useEffect(() => {
     setSelectedEntry(null);

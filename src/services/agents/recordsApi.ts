@@ -21,6 +21,30 @@ export function listAgentRecords() {
   return invoke<AgentRecord[]>("agent_record_list");
 }
 
+export function getAgentRecord(id: number) {
+  return invoke<AgentRecord | null>("agent_record_get", { id });
+}
+
+export function readAgentRecordMcpJson(id: number) {
+  return invoke<Record<string, unknown> | null>("agent_record_read_mcp_json", { id });
+}
+
+export function writeAgentRecordMcpJson(id: number, root: Record<string, unknown>) {
+  return invoke<string>("agent_record_write_mcp_json", { id, root });
+}
+
+export function getTopologyProxyScriptPath() {
+  return invoke<string>("topology_proxy_script_path");
+}
+
+export function getTopologyAggregatorScriptPath() {
+  return invoke<string>("topology_aggregator_script_path");
+}
+
+export function getTopologyMcpServerKey(clientId: string) {
+  return invoke<string>("topology_mcp_server_key", { clientId });
+}
+
 export async function createAgentRecord(
   agent: Pick<AgentRecord, "name" | "kind" | "configDirPath">,
 ) {

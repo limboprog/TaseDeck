@@ -55,6 +55,7 @@ export function McpRegistryGrid({ servers, onSelect }: McpRegistryGridProps) {
       {servers.map((entry) => (
         <YStack
           key={entryKey(entry)}
+          data-registry-entry-key={entryKey(entry)}
           minW={0}
           width="100%"
           height={MARKET_CARD_HEIGHT}

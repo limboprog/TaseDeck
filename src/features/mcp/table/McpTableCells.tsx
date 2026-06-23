@@ -9,6 +9,7 @@ import {
 } from "react";
 import { IoAdd, IoCheckmark, IoCopy, IoCopyOutline, IoFolder } from "../../../icons";
 import { LoaderSpinner } from "../../../components/LoaderSpinner";
+import { PaneExpandableText } from "../../../components/pane";
 import { TablePickerSearch, TablePickerSelect } from "../../../components/TablePicker";
 import type {
   TablePickerOption,
@@ -22,12 +23,14 @@ import {
   mcpTableAddButton,
   mcpTableBodyCell,
   mcpTableHeaderText,
+  MCP_TABLE_BODY_FONT_SIZE,
+  MCP_TABLE_BODY_LINE_HEIGHT,
   mcpTableRowBorder,
   mcpTransportRadioStyle,
   mcpTransportTitleText,
 } from "../mcpTableStyles";
 
-const LINE_HEIGHT = 18;
+const LINE_HEIGHT = MCP_TABLE_BODY_LINE_HEIGHT;
 const MIN_HEIGHT = 28;
 const TEXT_PAD_Y = (MIN_HEIGHT - LINE_HEIGHT) / 2;
 
@@ -146,8 +149,9 @@ export function McpTablePlainText({
   placeholder = "—",
   monospace = false,
   muted = false,
-  fontSize = 12,
+  fontSize = MCP_TABLE_BODY_FONT_SIZE,
   fontWeight,
+  tone = "default",
   isRowExpanded = false,
 }: {
   value: string;
@@ -156,6 +160,7 @@ export function McpTablePlainText({
   muted?: boolean;
   fontSize?: number;
   fontWeight?: number;
+  tone?: "default" | "panel";
   isRowExpanded?: boolean;
 }) {
   const display = value.trim() || placeholder;
@@ -165,10 +170,17 @@ export function McpTablePlainText({
     <McpTableEllipsisText
       value={display}
       isRowExpanded={isRowExpanded}
-      color={isPlaceholder || muted ? colors.muted : colors.foreground}
+      color={
+        isPlaceholder || muted
+          ? colors.muted
+          : tone === "panel"
+            ? colors.panelForeground
+            : colors.foreground
+      }
       fontSize={fontSize}
       fontWeight={fontWeight}
       monospace={monospace}
+      tone={tone}
     />
   );
 }
@@ -176,10 +188,11 @@ export function McpTablePlainText({
 export function McpTableEllipsisText({
   value,
   isRowExpanded = false,
-  color = colors.foreground,
-  fontSize = 12,
+  color,
+  fontSize = MCP_TABLE_BODY_FONT_SIZE,
   fontWeight,
   monospace = false,
+  tone = "default",
   title,
 }: {
   value: string;
@@ -188,65 +201,25 @@ export function McpTableEllipsisText({
   fontSize?: number;
   fontWeight?: number;
   monospace?: boolean;
+  tone?: "default" | "panel";
   title?: string;
 }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [overflows, setOverflows] = useState(false);
-  const collapsedLine = value.split("\n")[0] ?? "";
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node || isRowExpanded) {
-      setOverflows(false);
-      return;
-    }
-    setOverflows(
-      value.includes("\n") || node.scrollWidth > node.clientWidth + 1,
-    );
-  }, [isRowExpanded, value, collapsedLine]);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node || isRowExpanded) {
-      return;
-    }
-    const observer = new ResizeObserver(() => {
-      setOverflows(
-        value.includes("\n") || node.scrollWidth > node.clientWidth + 1,
-      );
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [isRowExpanded, value]);
+  const resolvedColor =
+    color ??
+    (tone === "panel" ? colors.panelForeground : colors.foreground);
 
   return (
-    <span
-      ref={ref}
-      title={title ?? (overflows && !isRowExpanded ? value : undefined)}
-      style={{
-        display: "block",
-        width: "100%",
-        minWidth: 0,
-        boxSizing: "border-box",
-        color,
-        fontSize,
-        fontWeight,
-        lineHeight: `${LINE_HEIGHT}px`,
-        fontFamily: monospace ? "ui-monospace, monospace" : "inherit",
-        paddingTop: TEXT_PAD_Y,
-        minHeight: MIN_HEIGHT,
-        ...(isRowExpanded
-          ? { whiteSpace: "pre-wrap", wordBreak: "break-word" }
-          : {
-              height: MIN_HEIGHT,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }),
-      }}
-    >
-      {isRowExpanded ? value : collapsedLine}
-    </span>
+    <PaneExpandableText
+      value={value}
+      expanded={isRowExpanded}
+      color={resolvedColor}
+      fontSize={fontSize}
+      fontWeight={fontWeight}
+      monospace={monospace}
+      lineHeight={LINE_HEIGHT}
+      minHeight={MIN_HEIGHT}
+      title={title}
+    />
   );
 }
 

@@ -7,6 +7,8 @@ type SplitPaneProps = {
   defaultRightRatio?: number;
   minLeft?: number;
   minRight?: number;
+  /** Invisible drag handle with gap — no separator line between panes. */
+  hideDivider?: boolean;
 };
 
 export function SplitPane({
@@ -15,6 +17,7 @@ export function SplitPane({
   defaultRightRatio = 0.75,
   minLeft = 220,
   minRight = 320,
+  hideDivider = false,
 }: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [rightRatio, setRightRatio] = useState(defaultRightRatio);
@@ -59,6 +62,7 @@ export function SplitPane({
         minHeight: 0,
         minWidth: 0,
         width: "100%",
+        gap: 0,
       }}
     >
       <div
@@ -77,17 +81,14 @@ export function SplitPane({
       <div
         onPointerDown={startDragging}
         style={{
-          width: 1,
+          width: hideDivider ? 6 : 1,
           cursor: "col-resize",
           flexShrink: 0,
-          marginLeft: 5,
-          marginRight: 5,
+          marginLeft: hideDivider ? 0 : 5,
+          marginRight: hideDivider ? 0 : 5,
           userSelect: "none",
           WebkitUserSelect: "none",
-          background: tamaguiSurfaces.controlHoverBg,
-          // borderLeft: "1px solid rgba(255, 255, 255, 0.08)",
-          // borderRight: "1px solid rgba(255, 255, 255, 0.08)",
-          
+          background: hideDivider ? "transparent" : tamaguiSurfaces.controlHoverBg,
         }}
       />
 

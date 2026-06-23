@@ -141,11 +141,126 @@ impl AgentRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectRecord {
+    #[serde(default)]
+    pub id: i64,
+    pub folder_path: String,
+    pub name: String,
+    pub icon_color: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyProjectInput {
+    pub name: String,
+    pub folder_path: String,
+    pub icon_color: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyPresetInput {
+    pub name: String,
+    #[serde(default)]
+    pub mcp_server_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBootstrapRequest {
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub legacy_projects: Vec<LegacyProjectInput>,
+    #[serde(default)]
+    pub legacy_presets: Vec<LegacyPresetInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBootstrapResult {
+    pub completed: bool,
+    pub skipped: bool,
+    pub agents_discovered: usize,
+    pub agents_created: usize,
+    pub projects_discovered: usize,
+    pub projects_upserted: usize,
+    pub links_created: usize,
+    pub presets_created: usize,
+    pub assignments_created: usize,
+    pub agent_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetRecord {
+    #[serde(default)]
+    pub id: i64,
+    pub name: String,
+    pub server_fingerprint: String,
+    #[serde(default)]
+    pub mcp_server_ids: Vec<i64>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceBootstrapStatus {
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPresetServerDetail {
+    pub server_key: String,
+    pub server: McpServer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAssignmentDetail {
+    pub preset_id: i64,
+    pub preset_name: String,
+    pub config_overrides: String,
+    pub servers: Vec<ProjectPresetServerDetail>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectAgentAssignmentDetail {
+    pub agent_id: i64,
+    pub assignment: Option<ProjectAssignmentDetail>,
+    pub has_custom_preset: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDetailRecord {
+    pub project: ProjectRecord,
+    pub agents: Vec<AgentRecord>,
+    pub default_assignment: Option<ProjectAssignmentDetail>,
+    pub agent_assignments: Vec<ProjectAgentAssignmentDetail>,
+    pub native_mcp_imported: bool,
+    pub default_source_mcp_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageLogEntry {
     pub id: u64,
     pub mcp_name: String,
     pub tool_name: String,
+    pub caller: String,
     pub success: bool,
     pub result: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<i64>,
 }

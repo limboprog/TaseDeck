@@ -23,6 +23,46 @@ export function formatUsageDate(raw: string): string {
   }
 
   const date = new Date(ms);
+  const months = [
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+  ] as const;
   const pad = (value: number) => String(value).padStart(2, "0");
-  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return `${months[date.getMonth()]} ${date.getDate()} at ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function formatUsageToolLabel(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (!trimmed) {
+    return "—";
+  }
+  if (/\bcall$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed} call`;
+}
+
+export const USER_CALLER_VALUE = "user";
+
+export function formatUsageCaller(caller: string): string {
+  const trimmed = caller.trim();
+  if (!trimmed || trimmed.toLowerCase() === USER_CALLER_VALUE) {
+    return "User";
+  }
+  return trimmed;
+}
+
+export function normalizeUsageCaller(caller: string): string {
+  const trimmed = caller.trim();
+  return trimmed ? trimmed.toLowerCase() : USER_CALLER_VALUE;
 }

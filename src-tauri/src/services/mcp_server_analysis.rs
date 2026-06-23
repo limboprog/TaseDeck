@@ -31,6 +31,10 @@ pub struct RunCommandsState {
     pub active_id: Option<String>,
     pub commands: Vec<RunCommandProfile>,
     pub shared_args: Vec<RunCommandArg>,
+    #[serde(default)]
+    pub raw_mode: bool,
+    #[serde(default)]
+    pub raw_command: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,11 +370,19 @@ fn infer_run_commands(
         }
     }
 
+    let raw_mode = stored.as_ref().map(|state| state.raw_mode).unwrap_or(false);
+    let raw_command = stored
+        .as_ref()
+        .map(|state| state.raw_command.clone())
+        .unwrap_or_default();
+
     if commands.is_empty() {
         return Ok(RunCommandsState {
             active_id: None,
             commands: Vec::new(),
             shared_args,
+            raw_mode,
+            raw_command,
         });
     }
 
@@ -383,6 +395,8 @@ fn infer_run_commands(
         active_id,
         commands,
         shared_args,
+        raw_mode,
+        raw_command,
     })
 }
 

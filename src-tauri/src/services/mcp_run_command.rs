@@ -4,7 +4,7 @@ use crate::services::security::reveal_config_values_for_runtime;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-const RUN_COMMANDS_CONFIG_KEY: &str = "__runCommands";
+pub const RUN_COMMANDS_CONFIG_KEY: &str = "__runCommands";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +15,10 @@ struct RunCommandsState {
     commands: Vec<RunCommandProfile>,
     #[serde(default)]
     shared_args: Vec<RunCommandArg>,
+    #[serde(default)]
+    raw_mode: bool,
+    #[serde(default)]
+    raw_command: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -41,9 +45,9 @@ struct RunCommandArg {
     value: String,
 }
 
-fn parse_run_commands_for_compile(
+fn parse_run_commands_state(
     config_values_json: &str,
-) -> AppResult<Option<(RunCommandProfile, Vec<RunCommandArg>)>> {
+) -> AppResult<Option<RunCommandsState>> {
     let values: HashMap<String, String> = if config_values_json.trim().is_empty() {
         HashMap::new()
     } else {
@@ -64,6 +68,16 @@ fn parse_run_commands_for_compile(
     let state: RunCommandsState = serde_json::from_str(raw)
         .map_err(|error| AppError::Message(format!("invalid run commands state: {error}")))?;
 
+    Ok(Some(state))
+}
+
+fn parse_run_commands_for_compile(
+    config_values_json: &str,
+) -> AppResult<Option<(RunCommandsState, RunCommandProfile, Vec<RunCommandArg>)>> {
+    let Some(state) = parse_run_commands_state(config_values_json)? else {
+        return Ok(None);
+    };
+
     let profile = state
         .active_id
         .as_ref()
@@ -76,7 +90,7 @@ fn parse_run_commands_for_compile(
     };
 
     let shared_args = resolve_shared_args(&state);
-    Ok(Some((profile, shared_args)))
+    Ok(Some((state, profile, shared_args)))
 }
 
 fn resolve_shared_args(state: &RunCommandsState) -> Vec<RunCommandArg> {
@@ -94,9 +108,12 @@ fn resolve_shared_args(state: &RunCommandsState) -> Vec<RunCommandArg> {
 
 /// Stored in DB: active command + enabled args, `${var}` kept for later substitution.
 pub fn compile_run_command_template_from_config_values(config_values_json: &str) -> AppResult<String> {
-    let Some((profile, shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
+    let Some((state, profile, shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
         return Ok(String::new());
     };
+    if state.raw_mode {
+        return Ok(state.raw_command.trim().to_string());
+    }
     Ok(compile_profile_template(&profile, &shared_args))
 }
 
@@ -110,9 +127,12 @@ pub fn compile_run_command_from_config_values(config_values_json: &str) -> AppRe
         })?
     };
 
-    let Some((profile, shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
+    let Some((state, profile, shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
         return Ok(String::new());
     };
+    if state.raw_mode {
+        return Ok(state.raw_command.trim().to_string());
+    }
     Ok(compile_profile_resolved(&profile, &shared_args, &values))
 }
 
@@ -189,9 +209,52 @@ pub enum McpActiveTransport {
 }
 
 pub fn resolve_active_transport(config_values_json: &str) -> AppResult<Option<McpActiveTransport>> {
-    let Some((profile, _shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
+    let Some((state, profile, _shared_args)) = parse_run_commands_for_compile(config_values_json)? else {
         return Ok(None);
     };
+
+    if state.raw_mode {
+        let raw = state.raw_command.trim();
+        if let Some(first_line) = raw.lines().next() {
+            if let Some(url) = first_line.strip_prefix("http ") {
+                let url = url.trim();
+                if !url.is_empty() {
+                    return Ok(Some(McpActiveTransport::Remote {
+                        transport_type: "streamable-http".to_string(),
+                        url: url.to_string(),
+                    }));
+                }
+            }
+            if let Some(url) = first_line.strip_prefix("sse ") {
+                let url = url.trim();
+                if !url.is_empty() {
+                    return Ok(Some(McpActiveTransport::Remote {
+                        transport_type: "sse".to_string(),
+                        url: url.to_string(),
+                    }));
+                }
+            }
+        }
+        if profile.transport == "streamable-http" || profile.transport == "sse" {
+            let values: HashMap<String, String> = if config_values_json.trim().is_empty() {
+                HashMap::new()
+            } else {
+                serde_json::from_str(config_values_json).map_err(|error| {
+                    AppError::Message(format!("invalid config_values JSON: {error}"))
+                })?
+            };
+            let url = resolve_env_template(profile.url.as_deref().unwrap_or(""), &values)
+                .trim()
+                .to_string();
+            if !url.is_empty() {
+                return Ok(Some(McpActiveTransport::Remote {
+                    transport_type: profile.transport,
+                    url,
+                }));
+            }
+        }
+        return Ok(Some(McpActiveTransport::Stdio));
+    }
 
     if profile.transport == "streamable-http" || profile.transport == "sse" {
         let values: HashMap<String, String> = if config_values_json.trim().is_empty() {
@@ -458,5 +521,36 @@ mod tests {
         let resolved = compile_run_command_from_config_values(&config_values.to_string())
             .expect("resolved");
         assert_eq!(resolved, "export api_key=\"secret\" node ${api_key} -y");
+    }
+
+    #[test]
+    fn raw_mode_remote_keeps_http_transport() {
+        let run_commands = serde_json::json!({
+            "activeId": "run-http",
+            "rawMode": true,
+            "rawCommand": "POST https://example.com/mcp\nContent-Type: application/json\n\n{}",
+            "commands": [{
+                "id": "run-http",
+                "transport": "streamable-http",
+                "url": "https://example.com/mcp",
+                "args": []
+            }]
+        });
+        let config_values = serde_json::json!({
+            "__runCommands": run_commands.to_string()
+        });
+        let transport = resolve_active_transport(&config_values.to_string())
+            .expect("transport")
+            .expect("some");
+        match transport {
+            McpActiveTransport::Remote {
+                transport_type,
+                url,
+            } => {
+                assert_eq!(transport_type, "streamable-http");
+                assert_eq!(url, "https://example.com/mcp");
+            }
+            McpActiveTransport::Stdio => panic!("expected remote transport"),
+        }
     }
 }

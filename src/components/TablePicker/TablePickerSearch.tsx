@@ -15,6 +15,7 @@ export function TablePickerSearch<T extends string = string>({
   autoFocus = false,
   icon,
   inputStyle,
+  renderItem,
 }: TablePickerSearchProps<T>) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -81,6 +82,7 @@ export function TablePickerSearch<T extends string = string>({
           onSelect(option);
           setOpen(false);
         }}
+        renderItem={renderItem}
       />
     </>
   );

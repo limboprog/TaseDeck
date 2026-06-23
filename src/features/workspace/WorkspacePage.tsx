@@ -9,6 +9,8 @@ import {
 import { deleteGraph } from "../../services/topology/graphApi";
 import { useTopologies } from "../../services/topology";
 import { colors } from "../../theme";
+import { McpPanel } from "../mcp/McpPanel";
+import { pageContentInsets } from "../../styles/layout";
 import { McpDetailPanel } from "./McpDetailPanel";
 import { TopologyGraph } from "./TopologyGraph";
 import { TopologyList } from "./TopologyList";
@@ -75,21 +77,34 @@ export function WorkspacePage({ workspaceActive = true }: WorkspacePageProps) {
   };
 
   return (
-    <YStack flex={1} minH={0} minW={0} overflow="hidden">
+    <YStack flex={1} minH={0} minW={0} overflow="hidden" {...pageContentInsets}>
       <SplitPane
         defaultRightRatio={0.75}
+        hideDivider
         left={
-          <TopologyList
-            topologies={topologies}
-            selectedId={selectedId}
-            onSelect={(id) => {
-              setSelectedId(id);
-              setSelectedMcpServerId(null);
+          <McpPanel
+            flex={1}
+            minH={0}
+            p={0}
+            overflow="hidden"
+            style={{
+              background: colors.surface,
+              backdropFilter: "none",
+              WebkitBackdropFilter: "none",
             }}
-            onCreate={handleCreate}
-            onToggleRunning={toggleRunning}
-            onDelete={handleDelete}
-          />
+          >
+            <TopologyList
+              topologies={topologies}
+              selectedId={selectedId}
+              onSelect={(id) => {
+                setSelectedId(id);
+                setSelectedMcpServerId(null);
+              }}
+              onCreate={handleCreate}
+              onToggleRunning={toggleRunning}
+              onDelete={handleDelete}
+            />
+          </McpPanel>
         }
         right={
           selectedTopology ? (

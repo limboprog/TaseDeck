@@ -17,6 +17,8 @@ export type McpDataTableProps = {
   shellStyle?: CSSProperties;
   /** Grid only — no outer `mcpBlackBlock` shell (nested tables). */
   bare?: boolean;
+  /** Omit column header row (body rows only). */
+  hideHeader?: boolean;
 };
 
 export function McpDataTable({
@@ -28,6 +30,7 @@ export function McpDataTable({
   shellRef,
   shellStyle,
   bare = false,
+  hideHeader = false,
 }: McpDataTableProps) {
   const grid = (
     <div
@@ -38,15 +41,17 @@ export function McpDataTable({
         alignItems: "stretch",
       }}
     >
-        {columns.map((column) => (
-          <div key={column.key} style={{ ...mcpTableHeaderCell, ...column.headerStyle }}>
-            {typeof column.header === "string" ? (
-              <span style={mcpTableHeaderText}>{column.header}</span>
-            ) : (
-              column.header
-            )}
-          </div>
-        ))}
+        {!hideHeader
+          ? columns.map((column) => (
+              <div key={column.key} style={{ ...mcpTableHeaderCell, ...column.headerStyle }}>
+                {typeof column.header === "string" ? (
+                  <span style={mcpTableHeaderText}>{column.header}</span>
+                ) : (
+                  column.header
+                )}
+              </div>
+            ))
+          : null}
         {empty ?? children}
     </div>
   );

@@ -17,6 +17,30 @@ pub fn user_database_path() -> PathBuf {
     user_storage_dir().join("mcp.db")
 }
 
+/// Transient proxy tool-call spool (ingested into SQLite, not stored in project folders).
+pub fn proxy_spool_dir() -> PathBuf {
+    user_storage_dir().join("proxy-spool")
+}
+
+/// Short-lived OAuth bearer tokens for proxy sidecars (not stored in project folders).
+pub fn oauth_runtime_token_path(server_id: i64) -> PathBuf {
+    oauth_runtime_dir().join(format!("{server_id}.token"))
+}
+
+/// Proxy touches this file to ask TaseDeck to refresh the runtime OAuth token.
+pub fn oauth_runtime_refresh_request_path(server_id: i64) -> PathBuf {
+    oauth_runtime_dir().join(format!("{server_id}.refresh"))
+}
+
+pub fn oauth_runtime_dir() -> PathBuf {
+    user_storage_dir().join("oauth-runtime")
+}
+
+/// Local master encryption key file (used when OS keyring is disabled).
+pub fn master_key_file_path() -> PathBuf {
+    user_storage_dir().join("master.key")
+}
+
 /// Ensures user storage directory exists and returns its path.
 pub fn ensure_user_storage_dir() -> std::io::Result<PathBuf> {
     let dir = user_storage_dir();

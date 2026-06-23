@@ -28,6 +28,7 @@ export {
   findRegistryEntryByRegistryKey,
   getRegistryConfigInputsForInstalled,
   getRegistryKeyFromInstalled,
+  resolveRegistryEntryFromInstalled,
 } from "./registryConfig";
 export {
   applyEnvRowsToConfig,
@@ -46,6 +47,7 @@ export {
 export {
   buildInstalledPathSet,
   canAddRegistryEntry,
+  findInstalledServerForEntry,
   getRegistryInstallKey,
   InstalledMcpPathsProvider,
   isRegistryEntryInstalled,

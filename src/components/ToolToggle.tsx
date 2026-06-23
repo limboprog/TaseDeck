@@ -4,18 +4,22 @@ type ToolToggleProps = {
   checked: boolean;
   onChange: (checked: boolean) => void;
   ariaLabel: string;
+  disabled?: boolean;
 };
 
-export function ToolToggle({ checked, onChange, ariaLabel }: ToolToggleProps) {
+export function ToolToggle({ checked, onChange, ariaLabel, disabled = false }: ToolToggleProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={ariaLabel}
+      disabled={disabled}
       onClick={(event) => {
         event.stopPropagation();
-        onChange(!checked);
+        if (!disabled) {
+          onChange(!checked);
+        }
       }}
       onPointerDown={(event) => event.stopPropagation()}
       style={{
@@ -25,9 +29,10 @@ export function ToolToggle({ checked, onChange, ariaLabel }: ToolToggleProps) {
         border: "none",
         background: checked ? colors.accent : borders.selected,
         position: "relative",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         flexShrink: 0,
         padding: 0,
+        opacity: disabled ? 0.6 : 1,
         transition: "background 0.15s ease",
       }}
     >

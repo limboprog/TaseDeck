@@ -3,6 +3,12 @@ import type { Topology } from "./types";
 
 const STORAGE_KEY = "tasedeck:topologies";
 
+export const TOPOLOGIES_CHANGED_EVENT = "topologies-changed";
+
+export function notifyTopologiesChanged() {
+  window.dispatchEvent(new CustomEvent(TOPOLOGIES_CHANGED_EVENT));
+}
+
 export function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -33,6 +39,7 @@ function loadTopologies(): Topology[] {
 
 export function saveTopologies(topologies: Topology[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(topologies));
+  notifyTopologiesChanged();
 }
 
 export function getStoredTopologies(): Topology[] {

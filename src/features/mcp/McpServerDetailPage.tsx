@@ -1,7 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { IoArrowBack, IoLogoGithub, PiGlobeThin } from "../../icons";
 import { Button, Input, Text, XStack, YStack } from "tamagui";
-import { McpPanel } from "./McpPanel";
 import {
   getRequiredInputs,
   parseServerSetup,
@@ -11,6 +10,7 @@ import {
 } from "../../services/mcp_registry/parser";
 import type { McpServerEntry } from "../../services/mcp_registry";
 import { borders, colors, surfaces, tamaguiSurfaces } from "../../theme";
+import type { InstalledMcpServer } from "../../services/mcp_installed";
 import { createDefaultInputValues } from "../../services/mcp_installed";
 import { openExternal } from "../../utils/openExternal";
 import { CommandBlock } from "./CommandBlock";
@@ -18,22 +18,18 @@ import { McpAddButton } from "./McpAddButton";
 
 type McpServerDetailPageProps = {
   entry: McpServerEntry;
-  onBack: () => void;
+  onBack?: () => void;
+  embedded?: boolean;
+  onInstalled?: (server: InstalledMcpServer) => void;
 };
 
-function formatLinkLabel(url: string, fallback: string) {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./, "");
-    const path = parsed.pathname.replace(/\/$/, "");
-    if (path && path !== "/") {
-      return `${host}${path}`;
-    }
-    return host || fallback;
-  } catch {
-    return fallback;
-  }
-}
+export type McpServerDetailContentProps = {
+  entry: McpServerEntry;
+  embedded?: boolean;
+  hideHeader?: boolean;
+  onInstalled?: (server: InstalledMcpServer) => void;
+};
+
 
 function formatDate(value?: string) {
   if (!value) {
@@ -57,7 +53,7 @@ function Chip({ label }: { label: string }) {
       borderWidth={1}
       borderColor={tamaguiSurfaces.controlHoverBg}
     >
-      <Text color={colors.muted} fontSize={11} fontWeight="500">
+      <Text color={colors.muted} fontSize={11} fontWeight="500" select="none">
         {label}
       </Text>
     </XStack>
@@ -107,6 +103,20 @@ function LinkChip({
   );
 }
 
+function formatLinkLabel(url: string, fallback: string) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const path = parsed.pathname.replace(/\/$/, "");
+    if (path && path !== "/") {
+      return `${host}${path}`;
+    }
+    return host || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function SubsectionTitle({ children }: { children: string }) {
   return (
     <Text color={colors.muted} fontSize={13} fontWeight="600">
@@ -115,7 +125,7 @@ function SubsectionTitle({ children }: { children: string }) {
   );
 }
 
-function ConnectionSection({
+function DetailSection({
   label,
   children,
 }: {
@@ -123,12 +133,10 @@ function ConnectionSection({
   children: ReactNode;
 }) {
   return (
-    <McpPanel p={16} gap={14}>
-      <Text color={colors.foreground} fontSize={16} fontWeight="700">
-        {label}
-      </Text>
+    <YStack gap={14} width="100%">
+      <SubsectionTitle>{label}</SubsectionTitle>
       {children}
-    </McpPanel>
+    </YStack>
   );
 }
 
@@ -311,7 +319,12 @@ function RemoteConnectionItem({
   );
 }
 
-export function McpServerDetailPage({ entry, onBack }: McpServerDetailPageProps) {
+export function McpServerDetailContent({
+  entry,
+  embedded = false,
+  hideHeader = false,
+  onInstalled,
+}: McpServerDetailContentProps) {
   const setup = useMemo(() => parseServerSetup(entry), [entry]);
   const primaryLocalSetup = setup.localSetups[0] ?? null;
   const [inputValues, setInputValues] = useState<Record<string, string>>(() =>
@@ -332,51 +345,138 @@ export function McpServerDetailPage({ entry, onBack }: McpServerDetailPageProps)
   };
 
   return (
-    <YStack flex={1} minH={0} minW={0} width="100%" overflow="hidden">
-      <XStack items="center" gap={12} mb={16} shrink={0}>
-        <Button
-          unstyled
-          width={36}
-          height={36}
-          rounded={8}
-          bg={tamaguiSurfaces.controlHoverBg}
-          hoverStyle={{ bg: borders.strong }}
-          onPress={onBack}
-          aria-label="Back to Market"
-        >
-          <XStack flex={1} items="center" justify="center" style={{ color: colors.foreground }}>
-            <IoArrowBack size={18} />
-          </XStack>
-        </Button>
-        <YStack flex={1} minW={0} gap={2}>
-          <Text
-            color={colors.foreground}
-            fontSize={22}
-            fontWeight="700"
-            letterSpacing={-0.02}
-            numberOfLines={1}
-          >
-            {title}
-          </Text>
-          <Text
-            color={colors.muted}
-            fontSize={13}
-            numberOfLines={1}
-            style={{ fontFamily: "monospace" }}
-          >
-            {server.name}
-          </Text>
-        </YStack>
-        <McpAddButton
-          entry={entry}
-          onAdded={() => setAddMessage("Added to MCP section.")}
-        />
-      </XStack>
+    <YStack flex={embedded ? undefined : 1} minH={0} minW={0} width="100%" overflow="hidden">
+      {hideHeader ? null : (
+        <XStack items="center" gap={12} mb={16} shrink={0}>
+          <YStack flex={1} minW={0} gap={2}>
+            <Text
+              color={colors.foreground}
+              fontSize={22}
+              fontWeight="700"
+              letterSpacing={-0.02}
+              numberOfLines={embedded ? 2 : 1}
+            >
+              {title}
+            </Text>
+            <Text
+              color={colors.muted}
+              fontSize={13}
+              numberOfLines={1}
+              style={{ fontFamily: "monospace" }}
+            >
+              {server.name}
+            </Text>
+          </YStack>
+          <McpAddButton
+            entry={entry}
+            onAdded={(installed) => {
+              setAddMessage("Server installed.");
+              onInstalled?.(installed);
+            }}
+          />
+        </XStack>
+      )}
 
       {addMessage ? (
-        <Text color={colors.muted} fontSize={13} mb={12} shrink={0}>
+        <Text color={colors.muted} fontSize={13} mb={12} shrink={0} select="none">
           {addMessage}
         </Text>
+      ) : null}
+
+      <YStack gap={20} pb={embedded ? 8 : 24} width="100%">
+        <XStack gap={8} flexWrap="wrap" width="100%">
+          <Chip label={`v${server.version}`} />
+          {meta.status ? <Chip label={meta.status} /> : null}
+          {published ? <Chip label={`Published ${published}`} /> : null}
+          {updated ? <Chip label={`Updated ${updated}`} /> : null}
+          {websiteUrl ? (
+            <LinkChip
+              href={websiteUrl}
+              icon={<PiGlobeThin size={12} color={colors.muted} />}
+              label={formatLinkLabel(websiteUrl, "Website")}
+            />
+          ) : null}
+          {repositoryUrl ? (
+            <LinkChip
+              href={repositoryUrl}
+              icon={<IoLogoGithub size={12} color={colors.muted} />}
+              label={formatLinkLabel(repositoryUrl, "GitHub")}
+            />
+          ) : null}
+        </XStack>
+
+        {server.description ? (
+          <Text color={colors.muted} fontSize={14} lineHeight={22} width="100%" select="none">
+            {server.description}
+          </Text>
+        ) : null}
+
+        {setup.hasLocal ? (
+          <DetailSection label="Local">
+            <YStack gap={20}>
+              {setup.localSetups.map((localSetup, index) => (
+                <LocalSetupBlock
+                  key={localSetup.id}
+                  setup={localSetup}
+                  showLabel={setup.localSetups.length > 1}
+                  values={index === 0 ? inputValues : undefined}
+                  onValueChange={index === 0 ? handleInputChange : undefined}
+                />
+              ))}
+            </YStack>
+          </DetailSection>
+        ) : null}
+
+        {setup.hasRemote ? (
+          <DetailSection label="Remote">
+            <RemoteConnectionsBlock setups={setup.remoteSetups} />
+          </DetailSection>
+        ) : null}
+
+        <YStack gap={8} width="100%">
+          <SubsectionTitle>Configuration JSON</SubsectionTitle>
+          <CommandBlock command={setup.rawJson} label="json" />
+        </YStack>
+      </YStack>
+    </YStack>
+  );
+}
+
+export function McpServerDetailPage({
+  entry,
+  onBack,
+  embedded = false,
+  onInstalled,
+}: McpServerDetailPageProps) {
+  if (embedded) {
+    return (
+      <McpServerDetailContent
+        entry={entry}
+        embedded
+        onInstalled={onInstalled}
+      />
+    );
+  }
+
+  return (
+    <YStack flex={1} minH={0} minW={0} width="100%" overflow="hidden">
+      {onBack ? (
+        <XStack items="center" gap={12} mb={16} shrink={0}>
+          <Button
+            unstyled
+            width={36}
+            height={36}
+            rounded={8}
+            bg={tamaguiSurfaces.controlHoverBg}
+            hoverStyle={{ bg: borders.strong }}
+            onPress={onBack}
+            aria-label="Back to Market"
+          >
+            <XStack flex={1} items="center" justify="center" style={{ color: colors.foreground }}>
+              <IoArrowBack size={18} />
+            </XStack>
+          </Button>
+        </XStack>
       ) : null}
 
       <div
@@ -387,60 +487,7 @@ export function McpServerDetailPage({ entry, onBack }: McpServerDetailPageProps)
           width: "100%",
         }}
       >
-        <YStack gap={20} pb={24} width="100%">
-          <XStack gap={8} flexWrap="wrap" width="100%">
-            <Chip label={`v${server.version}`} />
-            {meta.status ? <Chip label={meta.status} /> : null}
-            {published ? <Chip label={`Published ${published}`} /> : null}
-            {updated ? <Chip label={`Updated ${updated}`} /> : null}
-            {websiteUrl ? (
-              <LinkChip
-                href={websiteUrl}
-                icon={<PiGlobeThin size={12} color={colors.muted} />}
-                label={formatLinkLabel(websiteUrl, "Website")}
-              />
-            ) : null}
-            {repositoryUrl ? (
-              <LinkChip
-                href={repositoryUrl}
-                icon={<IoLogoGithub size={12} color={colors.muted} />}
-                label={formatLinkLabel(repositoryUrl, "GitHub")}
-              />
-            ) : null}
-          </XStack>
-
-          {server.description ? (
-            <Text color={colors.muted} fontSize={14} lineHeight={22} width="100%">
-              {server.description}
-            </Text>
-          ) : null}
-
-          {setup.hasLocal ? (
-            <ConnectionSection label="Local">
-              <YStack gap={20}>
-                {setup.localSetups.map((localSetup, index) => (
-                  <LocalSetupBlock
-                    key={localSetup.id}
-                    setup={localSetup}
-                    showLabel={setup.localSetups.length > 1}
-                    values={index === 0 ? inputValues : undefined}
-                    onValueChange={index === 0 ? handleInputChange : undefined}
-                  />
-                ))}
-              </YStack>
-            </ConnectionSection>
-          ) : null}
-
-          {setup.hasRemote ? (
-            <ConnectionSection label="Remote">
-              <RemoteConnectionsBlock setups={setup.remoteSetups} />
-            </ConnectionSection>
-          ) : null}
-
-          <ConnectionSection label="Configuration JSON">
-            <CommandBlock command={setup.rawJson} label="json" />
-          </ConnectionSection>
-        </YStack>
+        <McpServerDetailContent entry={entry} onInstalled={onInstalled} />
       </div>
     </YStack>
   );

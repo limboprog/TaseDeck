@@ -415,6 +415,10 @@ fn parse_stdio_transport(server: &McpServer) -> Result<Transport, String> {
     parse_run_command_stdio(server)
 }
 
+pub(crate) fn remote_headers_for_url(server: &McpServer, url: &str) -> HashMap<String, String> {
+    find_remote_headers(server, url)
+}
+
 fn find_remote_headers(server: &McpServer, url: &str) -> HashMap<String, String> {
     let target = url.trim();
     if target.is_empty() {

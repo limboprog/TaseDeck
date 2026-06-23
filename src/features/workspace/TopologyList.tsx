@@ -1,12 +1,12 @@
 import { useCallback, useState } from "react";
 import { IoAdd } from "../../icons";
+import { PaneView, ToolbarIconButton } from "../../components/pane";
 import { Text, XStack, YStack } from "tamagui";
 import type { Topology } from "../../services/topology";
 import { colors } from "../../theme";
 import { TopologyCreateRow } from "./TopologyCreateRow";
 import { TopologyRow } from "./TopologyRow";
 import { workspacePaneHeaderStyle } from "./workspacePaneHeader";
-import { WorkspaceIconButton } from "./workspaceIconButton";
 
 type TopologyListProps = {
   topologies: Topology[];
@@ -50,24 +50,23 @@ export function TopologyList({
   const showEmptyHint = topologies.length === 0 && !creating;
 
   return (
-    <YStack flex={1} minH={0} minW={0}>
-      <XStack
-        items="center"
-        justify="space-between"
-        style={workspacePaneHeaderStyle}
-      >
-        <Text color={colors.foreground} fontSize={15} fontWeight="600" select="none">
-          Topologies
-        </Text>
-        <WorkspaceIconButton
-          onPress={handleStartCreate}
-          disabled={creating}
-          aria-label="Create topology"
-        >
-          <IoAdd size={20} />
-        </WorkspaceIconButton>
-      </XStack>
-
+    <PaneView
+      flex={1}
+      header={
+        <XStack items="center" justify="space-between" style={workspacePaneHeaderStyle}>
+          <Text color={colors.foreground} fontSize={15} fontWeight="600" select="none">
+            Topologies
+          </Text>
+          <ToolbarIconButton
+            onClick={handleStartCreate}
+            disabled={creating}
+            aria-label="Create topology"
+          >
+            <IoAdd size={20} />
+          </ToolbarIconButton>
+        </XStack>
+      }
+    >
       {showEmptyHint ? (
         <YStack flex={1} justify="center" items="center" px={12} pt={8}>
           <Text color={colors.muted.trim() as never} fontSize={13} text="center">
@@ -97,6 +96,6 @@ export function TopologyList({
           ))}
         </YStack>
       )}
-    </YStack>
+    </PaneView>
   );
 }

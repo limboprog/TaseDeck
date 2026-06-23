@@ -33,7 +33,7 @@ pub fn graph_save_links(
 
 #[tauri::command]
 pub fn graph_list_placeable_agents(db: State<'_, Arc<Database>>) -> AppResult<Vec<AgentRecord>> {
-    Ok(db.list_agent_records()?)
+    Ok(filter_graph_eligible_agents(db.list_agent_records()?))
 }
 
 #[tauri::command]

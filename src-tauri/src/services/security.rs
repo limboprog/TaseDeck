@@ -1,13 +1,16 @@
+use crate::core::app_settings::{self, use_os_keyring_enabled};
+use crate::core::fs::{ensure_user_storage_dir, master_key_file_path};
 use crate::error::{AppError, AppResult};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use once_cell::sync::OnceCell;
 use rand::RngCore;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
+use std::fs;
+use std::sync::{Mutex, RwLock};
 
 const KEYRING_SERVICE: &str = "TaseDeck";
 const KEYRING_USER: &str = "master_encryption_key";
@@ -17,10 +20,29 @@ pub const OAUTH_REFRESH_TOKEN_KEY: &str = "__oauthRefreshToken";
 pub const OAUTH_API_KEY_KEY: &str = "__oauthApiKey";
 pub const OAUTH_CLIENT_ID_KEY: &str = "__oauthClientId";
 
-static MASTER_KEY: OnceCell<[u8; 32]> = OnceCell::new();
+static MASTER_KEY: RwLock<Option<[u8; 32]>> = RwLock::new(None);
+static KEYRING_OPS: Mutex<()> = Mutex::new(());
 
-/// Ensures the master key exists in the OS keyring (created on first call).
+/// Ensures the master encryption key exists for the active storage mode.
 pub fn ensure_initialized() -> AppResult<()> {
+    let _ = master_key_bytes()?;
+    Ok(())
+}
+
+pub fn get_use_os_keyring() -> AppResult<bool> {
+    use_os_keyring_enabled()
+}
+
+pub fn set_use_os_keyring(enabled: bool) -> AppResult<()> {
+    let current = use_os_keyring_enabled()?;
+    if current == enabled {
+        return Ok(());
+    }
+
+    let key = master_key_bytes()?;
+    app_settings::set_use_os_keyring_enabled(enabled)?;
+    store_master_key(enabled, &key)?;
+    clear_master_key_cache();
     let _ = master_key_bytes()?;
     Ok(())
 }
@@ -52,7 +74,7 @@ pub fn looks_masked(value: &str) -> bool {
 
 pub fn encrypt_string(plaintext: &str) -> AppResult<String> {
     let key = master_key_bytes()?;
-    let cipher = Aes256Gcm::new_from_slice(key)
+    let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|error| AppError::Message(format!("invalid encryption key: {error}")))?;
 
     let mut nonce_bytes = [0_u8; 12];
@@ -86,7 +108,7 @@ pub fn decrypt_string(payload: &str) -> AppResult<String> {
 
     let (nonce_bytes, ciphertext) = bytes.split_at(12);
     let key = master_key_bytes()?;
-    let cipher = Aes256Gcm::new_from_slice(key)
+    let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|error| AppError::Message(format!("invalid encryption key: {error}")))?;
 
     let plaintext = cipher
@@ -223,11 +245,38 @@ pub fn resolve_config_values_for_runtime(
         .map_err(|error| AppError::Message(format!("invalid config_values: {error}")))
 }
 
-fn master_key_bytes() -> AppResult<&'static [u8; 32]> {
-    Ok(MASTER_KEY.get_or_try_init(load_or_create_master_key)?)
+fn master_key_bytes() -> AppResult<[u8; 32]> {
+    if let Ok(guard) = MASTER_KEY.read() {
+        if let Some(key) = *guard {
+            return Ok(key);
+        }
+    }
+
+    let key = load_or_create_master_key()?;
+    if let Ok(mut guard) = MASTER_KEY.write() {
+        *guard = Some(key);
+    }
+    Ok(key)
+}
+
+fn clear_master_key_cache() {
+    if let Ok(mut guard) = MASTER_KEY.write() {
+        *guard = None;
+    }
 }
 
 fn load_or_create_master_key() -> AppResult<[u8; 32]> {
+    if use_os_keyring_enabled()? {
+        load_or_create_keyring_master_key()
+    } else {
+        load_or_create_file_master_key()
+    }
+}
+
+fn load_or_create_keyring_master_key() -> AppResult<[u8; 32]> {
+    let _guard = KEYRING_OPS
+        .lock()
+        .map_err(|_| AppError::Message("keyring lock poisoned".into()))?;
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
         .map_err(|error| AppError::Message(format!("keyring unavailable: {error}")))?;
 
@@ -235,22 +284,104 @@ fn load_or_create_master_key() -> AppResult<[u8; 32]> {
         return decode_master_key(&encoded);
     }
 
-    let mut key = [0_u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut key);
-    let encoded = B64.encode(key);
+    if master_key_file_path().is_file() {
+        let key = read_master_key_file()?;
+        entry
+            .set_password(&B64.encode(key))
+            .map_err(|error| AppError::Message(format!("failed to store master key: {error}")))?;
+        return Ok(key);
+    }
+
+    let key = generate_master_key();
     entry
-        .set_password(&encoded)
+        .set_password(&B64.encode(key))
         .map_err(|error| AppError::Message(format!("failed to store master key: {error}")))?;
     Ok(key)
+}
+
+fn load_or_create_file_master_key() -> AppResult<[u8; 32]> {
+    if master_key_file_path().is_file() {
+        return read_master_key_file();
+    }
+
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+        let _guard = KEYRING_OPS
+            .lock()
+            .map_err(|_| AppError::Message("keyring lock poisoned".into()))?;
+        if let Ok(encoded) = entry.get_password() {
+            let key = decode_master_key(&encoded)?;
+            write_master_key_file(&key)?;
+            return Ok(key);
+        }
+    }
+
+    let key = generate_master_key();
+    write_master_key_file(&key)?;
+    Ok(key)
+}
+
+fn store_master_key(use_keyring: bool, key: &[u8; 32]) -> AppResult<()> {
+    if use_keyring {
+        let _guard = KEYRING_OPS
+            .lock()
+            .map_err(|_| AppError::Message("keyring lock poisoned".into()))?;
+        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+            .map_err(|error| AppError::Message(format!("keyring unavailable: {error}")))?;
+        entry
+            .set_password(&B64.encode(key))
+            .map_err(|error| AppError::Message(format!("failed to store master key: {error}")))?;
+    } else {
+        write_master_key_file(key)?;
+    }
+    Ok(())
+}
+
+fn read_master_key_file() -> AppResult<[u8; 32]> {
+    let path = master_key_file_path();
+    let encoded = fs::read_to_string(&path)
+        .map_err(|error| AppError::Message(format!("failed to read master key file: {error}")))?;
+    decode_master_key(&encoded)
+}
+
+fn write_master_key_file(key: &[u8; 32]) -> AppResult<()> {
+    ensure_user_storage_dir().map_err(|error| {
+        AppError::Message(format!("failed to create user storage: {error}"))
+    })?;
+    let path = master_key_file_path();
+    fs::write(&path, B64.encode(key))
+        .map_err(|error| AppError::Message(format!("failed to write master key file: {error}")))?;
+    restrict_master_key_permissions(&path)?;
+    Ok(())
+}
+
+fn restrict_master_key_permissions(path: &std::path::Path) -> AppResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(path)
+            .map_err(|error| AppError::Message(format!("failed to read master key permissions: {error}")))?
+            .permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(path, permissions).map_err(|error| {
+            AppError::Message(format!("failed to restrict master key permissions: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+fn generate_master_key() -> [u8; 32] {
+    let mut key = [0_u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut key);
+    key
 }
 
 fn decode_master_key(encoded: &str) -> AppResult<[u8; 32]> {
     let bytes = B64
         .decode(encoded.trim())
-        .map_err(|error| AppError::Message(format!("invalid master key in keyring: {error}")))?;
+        .map_err(|error| AppError::Message(format!("invalid master key: {error}")))?;
     if bytes.len() != 32 {
         return Err(AppError::Message(
-            "master key in keyring has invalid length".to_string(),
+            "master key has invalid length".to_string(),
         ));
     }
     let mut key = [0_u8; 32];

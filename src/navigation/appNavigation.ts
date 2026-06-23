@@ -4,15 +4,23 @@ import {
   getRegistryKeyFromInstalled,
 } from "../services/mcp_installed/registryConfig";
 import {
-  defaultMarketPageSession,
-  MARKET_PAGE_SESSION_KEY,
+  defaultMcpPageSession,
+  readPageSession,
   writePageSession,
 } from "../session/appSession";
 
+const MCP_PAGE_SESSION_KEY = "mcp-installed";
+
 export const APP_NAVIGATE_EVENT = "tasedeck:app-navigate";
+
+export const APP_OPEN_MCP_SERVER_EVENT = "tasedeck:open-mcp-server";
 
 export type AppNavigateDetail = {
   navId: NavId;
+};
+
+export type OpenMcpServerDetail = {
+  serverId: number;
 };
 
 export function navigateApp(navId: NavId) {
@@ -23,18 +31,40 @@ export function navigateApp(navId: NavId) {
   );
 }
 
-export function openMarketServerDetail(server: InstalledMcpServer) {
-  const registryKey = getRegistryKeyFromInstalled(server);
-  const fallbackName = server.name.trim();
-  if (!registryKey && !server.id && !fallbackName) {
+export function openMcpServerDetail(server: InstalledMcpServer) {
+  if (!server.id) {
+    const registryKey = getRegistryKeyFromInstalled(server);
+    const fallbackName = server.name.trim();
+    if (!registryKey && !fallbackName) {
+      return;
+    }
+    const stored = readPageSession(MCP_PAGE_SESSION_KEY, defaultMcpPageSession());
+    writePageSession(MCP_PAGE_SESSION_KEY, {
+      ...stored,
+      pendingDetailRegistryKey: registryKey,
+      pendingDetailServerId: null,
+      pendingDetailServerName: registryKey ? null : fallbackName || null,
+    });
+    navigateApp("mcp");
     return;
   }
-  writePageSession(MARKET_PAGE_SESSION_KEY, {
-    ...defaultMarketPageSession(),
-    pendingDetailRegistryKey: registryKey,
-    pendingDetailServerId: registryKey ? null : server.id || null,
-    pendingDetailServerName:
-      registryKey || server.id ? null : fallbackName || null,
+
+  const stored = readPageSession(MCP_PAGE_SESSION_KEY, defaultMcpPageSession());
+  writePageSession(MCP_PAGE_SESSION_KEY, {
+    ...stored,
+    pendingDetailRegistryKey: null,
+    pendingDetailServerId: server.id,
+    pendingDetailServerName: null,
+    selectedInstalledId: server.id,
+    selectedRegistryKey: null,
   });
-  navigateApp("market");
+  window.dispatchEvent(
+    new CustomEvent<OpenMcpServerDetail>(APP_OPEN_MCP_SERVER_EVENT, {
+      detail: { serverId: server.id },
+    }),
+  );
+  navigateApp("mcp");
 }
+
+/** @deprecated Use openMcpServerDetail */
+export const openMarketServerDetail = openMcpServerDetail;

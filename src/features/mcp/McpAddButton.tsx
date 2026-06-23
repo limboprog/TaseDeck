@@ -1,6 +1,7 @@
 import { memo, useRef, useState } from "react";
 import { BiLoaderAlt } from "../../icons";
 import type { McpServerEntry } from "../../services/mcp_registry";
+import type { InstalledMcpServer } from "../../services/mcp_installed";
 import {
   addRegistryServer,
   canAddRegistryEntry,
@@ -12,7 +13,7 @@ import { colors, market, surfaces, tamaguiSurfaces } from "../../theme";
 type McpAddButtonProps = {
   entry: McpServerEntry;
   compact?: boolean;
-  onAdded?: () => void;
+  onAdded?: (server: InstalledMcpServer) => void;
 };
 
 const COMPACT = { minWidth: 48, height: 26, fontSize: 11, spinner: 14 };
@@ -46,8 +47,8 @@ function McpAddButtonInner({
     setAdding(true);
 
     void addRegistryServer(entry)
-      .then(() => {
-        onAdded?.();
+      .then((installed) => {
+        onAdded?.(installed);
       })
       .catch((cause) => {
         setError(cause instanceof Error ? cause.message : String(cause));
@@ -91,7 +92,7 @@ function McpAddButtonInner({
           handleAdd();
         }}
         disabled={isAdded}
-        aria-label={isAdded ? "MCP server added" : "Add MCP server"}
+        aria-label={isAdded ? "MCP server installed" : "Install MCP server"}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -111,7 +112,7 @@ function McpAddButtonInner({
           flexShrink: 0,
         }}
       >
-        <span style={{ display: "block", lineHeight: 1 }}>{isAdded ? "Added" : "Add"}</span>
+        <span style={{ display: "block", lineHeight: 1 }}>{isAdded ? "Installed" : "Install"}</span>
       </button>
       {error && !compact ? (
         <span style={{ display: "block", color: colors.error, fontSize: 12, marginTop: 6 }}>

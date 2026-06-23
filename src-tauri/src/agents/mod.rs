@@ -1,5 +1,10 @@
 pub mod builtin;
 pub mod mcp_json;
+pub mod project_proxy_export;
+pub mod proxy_sidecar;
+pub mod project_discovery;
+pub mod project_mcp;
+pub mod project_mcp_import;
 pub mod registry;
 pub mod resolve;
 pub mod traits;

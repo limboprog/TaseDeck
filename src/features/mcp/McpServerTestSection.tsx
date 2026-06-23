@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type MouseEvent } from "react";
 import { parseAuthRequiredError } from "../../services/mcp_installed/oauthApi";
 import type { McpAuthChallenge } from "../../services/mcp_installed/oauthApi";
 import { flushSync } from "react-dom";
@@ -71,12 +71,20 @@ type McpServerTestSectionProps = {
   onAuthRequired?: (challenge: McpAuthChallenge) => void;
 };
 
-export function McpServerTestSection({
+export type McpServerTestSectionHandle = {
+  runAll: () => Promise<void>;
+};
+
+export const McpServerTestSection = forwardRef<McpServerTestSectionHandle, McpServerTestSectionProps>(
+  function McpServerTestSection(
+    {
   serverId,
   disabled = false,
   resetKey = "",
   onAuthRequired,
-}: McpServerTestSectionProps) {
+},
+  ref,
+) {
   const tableRef = useRef<HTMLDivElement>(null);
   const [rows, setRows] = useState<Record<string, RowState>>(() => ({ ...INITIAL_ROWS }));
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
@@ -89,12 +97,11 @@ export function McpServerTestSection({
     setCopiedRowId(null);
   }, [resetKey, serverId]);
 
-  const runTest = useCallback(
-    async (row: TestRowDef, event: MouseEvent) => {
+  const runTestForRow = useCallback(
+    async (row: TestRowDef) => {
       if (disabled) {
         return;
       }
-      event.stopPropagation();
       flushSync(() => {
         setRows((current) => ({
           ...current,
@@ -103,7 +110,9 @@ export function McpServerTestSection({
       });
 
       try {
-        const response: McpProbeResult = await probeMcpOperation(serverId, row.probeOp);
+        const response: McpProbeResult = await probeMcpOperation(serverId, row.probeOp, {
+          recordUsage: true,
+        });
         const authChallenge = parseAuthRequiredError(response.result);
         if (authChallenge?.flow === "oauth" || authChallenge?.flow === "api_key") {
           onAuthRequired?.(authChallenge);
@@ -124,6 +133,26 @@ export function McpServerTestSection({
       }
     },
     [disabled, onAuthRequired, serverId],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      runAll: async () => {
+        for (const row of TEST_ROWS) {
+          await runTestForRow(row);
+        }
+      },
+    }),
+    [runTestForRow],
+  );
+
+  const runTest = useCallback(
+    async (row: TestRowDef, event: MouseEvent) => {
+      event.stopPropagation();
+      await runTestForRow(row);
+    },
+    [runTestForRow],
   );
 
   const copyResult = useCallback(async (rowId: string, text: string, event: MouseEvent) => {
@@ -245,4 +274,5 @@ export function McpServerTestSection({
       </McpDataTable>
     </div>
   );
-}
+},
+);
