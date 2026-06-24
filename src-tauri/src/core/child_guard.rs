@@ -61,8 +61,8 @@ fn kill_pid(pid: u32) {
     }
     #[cfg(windows)]
     {
-        use std::process::Command as OsCommand;
-        let _ = OsCommand::new("taskkill")
+        use crate::core::process::hidden_command;
+        let _ = hidden_command("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output();
     }

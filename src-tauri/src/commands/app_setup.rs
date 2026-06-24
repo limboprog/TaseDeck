@@ -1,6 +1,7 @@
 use crate::core::app_settings::{self, AppSettings};
 use crate::core::node_runtime::{
-    download_node_lts, node_runtime_status, validate_node_executable, NodeRuntimeStatus,
+    download_node_lts, clear_node_runtime_cache, node_runtime_status, validate_node_executable,
+    NodeRuntimeStatus,
 };
 use crate::error::AppResult;
 use std::path::PathBuf;
@@ -18,11 +19,13 @@ pub fn app_save_setup_settings(settings: AppSettings) -> AppResult<AppSettings> 
 
 #[tauri::command]
 pub fn app_set_node_path(path: Option<String>) -> AppResult<AppSettings> {
-    app_settings::update_app_settings(|settings| {
+    let settings = app_settings::update_app_settings(|settings| {
         settings.node_path = path
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-    })
+    })?;
+    clear_node_runtime_cache();
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -54,6 +57,7 @@ pub fn app_download_node_runtime() -> AppResult<String> {
     app_settings::update_app_settings(|settings| {
         settings.node_path = Some(display.clone());
     })?;
+    clear_node_runtime_cache();
     Ok(display)
 }
 

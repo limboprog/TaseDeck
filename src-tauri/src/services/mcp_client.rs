@@ -1,6 +1,6 @@
 use crate::core::child_guard::{apply_parent_death_signal, stop_child};
 use crate::core::env::{apply_process_env, shell_command_builder};
-use crate::core::process::hide_console_window;
+use crate::core::process::hidden_command;
 use crate::db::McpServer;
 use crate::services::mcp_protocol::{
     build_json_rpc_request, execute_with_retry, format_json_rpc_failure, McpRetrySession,
@@ -681,7 +681,6 @@ fn shell_escape(value: &str) -> String {
 
 fn spawn_shell_command(shell: &str, extra_env: &HashMap<String, String>) -> Result<Child, String> {
     let mut command_builder = shell_command_builder();
-    hide_console_window(&mut command_builder);
     command_builder
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -704,8 +703,7 @@ fn spawn_direct_process(
     args: &[String],
     env: &HashMap<String, String>,
 ) -> Result<Child, String> {
-    let mut command_builder = Command::new(command);
-    hide_console_window(&mut command_builder);
+    let mut command_builder = hidden_command(command);
     command_builder
         .args(args)
         .stdin(Stdio::piped())

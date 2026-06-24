@@ -1,8 +1,9 @@
 use crate::core::app_settings::current_app_settings;
 use crate::core::fs::{ensure_user_storage_dir, user_storage_dir};
+use crate::core::process::hidden_command;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,9 +46,37 @@ pub fn resolve_node_executable() -> Option<PathBuf> {
     detect_system_node()
 }
 
+static SYSTEM_NODE_CACHE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+/// Call after changing the configured Node.js path in settings.
+pub fn clear_node_runtime_cache() {
+    if let Some(cache) = SYSTEM_NODE_CACHE.get() {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = None;
+        }
+    }
+}
+
 pub fn detect_system_node() -> Option<PathBuf> {
+    if let Some(cache) = SYSTEM_NODE_CACHE.get() {
+        if let Ok(guard) = cache.lock() {
+            if let Some(path) = guard.as_ref() {
+                return Some(path.clone());
+            }
+        }
+    }
+
+    let found = detect_system_node_uncached();
+    match SYSTEM_NODE_CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        Ok(mut guard) => *guard = found.clone(),
+        Err(_) => return found,
+    }
+    found
+}
+
+fn detect_system_node_uncached() -> Option<PathBuf> {
     let command = if cfg!(windows) { "where" } else { "which" };
-    let output = Command::new(command).arg("node").output().ok()?;
+    let output = hidden_command(command).arg("node").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -68,7 +97,7 @@ pub fn validate_node_executable(path: &Path) -> Result<String, String> {
     if !path.is_file() {
         return Err(format!("Node.js binary not found at {}", path.display()));
     }
-    let output = Command::new(path)
+    let output = hidden_command(path)
         .arg("--version")
         .output()
         .map_err(|error| format!("failed to run node --version: {error}"))?;
@@ -181,7 +210,7 @@ pub fn download_node_lts() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&extract_dir).map_err(|error| error.to_string())?;
 
     if archive_name.ends_with(".tar.gz") {
-        let status = Command::new("tar")
+        let status = hidden_command("tar")
             .args(["-xzf", archive_path.to_string_lossy().as_ref(), "-C"])
             .arg(&extract_dir)
             .status()
@@ -190,7 +219,7 @@ pub fn download_node_lts() -> Result<PathBuf, String> {
             return Err("tar failed to extract Node.js archive".to_string());
         }
     } else if archive_name.ends_with(".zip") {
-        let status = Command::new("tar")
+        let status = hidden_command("tar")
             .args(["-xf", archive_path.to_string_lossy().as_ref(), "-C"])
             .arg(&extract_dir)
             .status()

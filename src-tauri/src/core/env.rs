@@ -1,5 +1,5 @@
 use crate::core::node_runtime::resolve_node_executable;
-use crate::core::process::hide_console_window;
+use crate::core::process::hidden_command;
 use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
@@ -10,8 +10,7 @@ use std::process::Command;
 pub fn shell_command_builder() -> Command {
     #[cfg(windows)]
     {
-        let mut command = Command::new("cmd");
-        hide_console_window(&mut command);
+        let mut command = hidden_command("cmd");
         command.arg("/C");
         command
     }
