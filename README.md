@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="./public/LOGO.svg" alt="TaseDeck logo" width="120" />
-</p>
-
-<h1 align="center">TaseDeck - Topology of agent-server execution</h1>
+<h1 align="center">
+  <img src="./public/LOGO.svg" alt="TaseDeck logo" width="46" />
+  TaseDeck - Topology of agent-server execution
+</h1>
 
 <p align="center">
   A desktop control plane for MCP servers, project presets, agent configs, and tool-call observability.
@@ -49,7 +48,11 @@ This view is designed around execution topology, not just lists. You can see whi
 
 The Usage screen records MCP tool calls routed through the project proxy. It helps answer: which agent called which server, which tool was invoked, whether it succeeded, and what result came back.
 
-![Usage log](./docs/assets/usage-log.png)
+<p align="center">
+  <a href="./docs/assets/usage-log.png">
+    <img src="./docs/assets/usage-log.png" alt="Usage log" width="100%" />
+  </a>
+</p>
 
 The filters let you inspect calls by caller, MCP server, date, and result. This is useful for debugging agent behavior, validating project presets, and understanding which tools are actually used in a workflow.
 
