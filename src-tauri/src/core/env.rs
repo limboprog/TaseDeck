@@ -1,4 +1,5 @@
 use crate::core::node_runtime::resolve_node_executable;
+use crate::core::process::hide_console_window;
 use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;

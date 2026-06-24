@@ -91,20 +91,20 @@ fn try_rename(from: &Path, to: &Path) -> Result<(), String> {
     match fs::rename(from, to) {
         Ok(()) => Ok(()),
         Err(first_error) => {
+            #[cfg(not(windows))]
+            {
+                return Err(format!(
+                    "failed to rename {} -> {}: {first_error}",
+                    from.display(),
+                    to.display()
+                ));
+            }
             #[cfg(windows)]
             {
                 if let Ok(()) = try_rename_windows_movefileex(from, to) {
                     return Ok(());
                 }
                 return try_rename_windows_backup(from, to);
-            }
-            #[cfg(not(windows))]
-            {
-                Err(format!(
-                    "failed to rename {} -> {}: {first_error}",
-                    from.display(),
-                    to.display()
-                ))
             }
         }
     }
