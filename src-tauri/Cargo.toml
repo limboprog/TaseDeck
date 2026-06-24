@@ -44,6 +44,14 @@ url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 toml = "0.8"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
-

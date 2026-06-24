@@ -45,6 +45,8 @@ pub fn run_workspace_bootstrap(
         });
     }
 
+    let settings = crate::core::app_settings::current_app_settings().unwrap_or_default();
+
     let mut agents_discovered = 0usize;
     let mut agents_created = 0usize;
     let mut projects_discovered = 0usize;
@@ -55,32 +57,37 @@ pub fn run_workspace_bootstrap(
 
     let mut discovered_agents: Vec<AgentRecord> = Vec::new();
 
-    for entry in list_catalog() {
-        let Some(config_dir_path) = resolve_auto_config_path(&entry.kind)? else {
-            continue;
-        };
-        agents_discovered += 1;
+    if settings.enable_agent_sync {
+        for entry in list_catalog() {
+            let Some(config_dir_path) = resolve_auto_config_path(&entry.kind)? else {
+                continue;
+            };
+            agents_discovered += 1;
 
-        let agent = if let Some(existing) =
-            db.find_agent_by_kind_and_config_path(&entry.kind, &config_dir_path)?
-        {
-            existing
-        } else if let Some(existing) = db.find_agent_by_kind(&entry.kind)? {
-            existing
-        } else {
-            let created = db.insert_agent_record(&AgentRecord {
-                id: 0,
-                name: entry.label.clone(),
-                kind: entry.kind.clone(),
-                config_dir_path,
-                created_at: String::new(),
-                updated_at: String::new(),
-            })?;
-            agents_created += 1;
-            created
-        };
+            let agent = if let Some(existing) =
+                db.find_agent_by_kind_and_config_path(&entry.kind, &config_dir_path)?
+            {
+                existing
+            } else if let Some(existing) = db.find_agent_by_kind(&entry.kind)? {
+                existing
+            } else {
+                let created = db.insert_agent_record(&AgentRecord {
+                    id: 0,
+                    name: entry.label.clone(),
+                    kind: entry.kind.clone(),
+                    config_dir_path,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                })?;
+                agents_created += 1;
+                created
+            };
 
-        discovered_agents.push(agent);
+            discovered_agents.push(agent);
+        }
+    } else if let Ok(existing) = db.list_agent_records() {
+        discovered_agents = existing;
+        agents_discovered = discovered_agents.len();
     }
 
     let agent_ids: Vec<i64> = discovered_agents.iter().map(|agent| agent.id).collect();
@@ -97,16 +104,18 @@ pub fn run_workspace_bootstrap(
     }
 
     let mut agent_project_paths: HashMap<i64, BTreeSet<String>> = HashMap::new();
-    for agent in &discovered_agents {
-        let paths = discover_projects_for_agent_kind(&agent.kind)
-            .into_iter()
-            .filter(|path| project_has_mcp_config(path, &agent.kind))
-            .map(|path| path.display().to_string())
-            .collect::<BTreeSet<_>>();
-        for path in &paths {
-            unique_project_paths.insert(path.clone());
+    if settings.enable_file_scan {
+        for agent in &discovered_agents {
+            let paths = discover_projects_for_agent_kind(&agent.kind)
+                .into_iter()
+                .filter(|path| project_has_mcp_config(path, &agent.kind))
+                .map(|path| path.display().to_string())
+                .collect::<BTreeSet<_>>();
+            for path in &paths {
+                unique_project_paths.insert(path.clone());
+            }
+            agent_project_paths.insert(agent.id, paths);
         }
-        agent_project_paths.insert(agent.id, paths);
     }
 
     projects_discovered = unique_project_paths.len();
@@ -145,51 +154,53 @@ pub fn run_workspace_bootstrap(
     let mut scans: Vec<ProjectMcpScan> = Vec::new();
     let mut imported_project_ids: Vec<i64> = Vec::new();
 
-    for (folder_path, (project_id, project_name)) in &project_records {
-        if legacy_paths.contains(folder_path) {
-            continue;
+    if settings.enable_tool_index {
+        for (folder_path, (project_id, project_name)) in &project_records {
+            if legacy_paths.contains(folder_path) {
+                continue;
+            }
+
+            let project_root = match normalize_folder_path(folder_path) {
+                Some(path) => path,
+                None => continue,
+            };
+
+            let linked_kinds: Vec<String> = discovered_agents
+                .iter()
+                .filter(|agent| {
+                    agent_project_paths
+                        .get(&agent.id)
+                        .is_some_and(|paths| paths.contains(folder_path))
+                })
+                .map(|agent| agent.kind.clone())
+                .collect();
+
+            let merged_servers =
+                collect_native_project_mcp_servers(&project_root, &linked_kinds);
+
+            if merged_servers.is_empty() {
+                continue;
+            }
+
+            scans.push(ProjectMcpScan {
+                project_id: *project_id,
+                project_name: project_name.clone(),
+                folder_path: folder_path.clone(),
+                servers: merged_servers,
+            });
         }
 
-        let project_root = match normalize_folder_path(folder_path) {
-            Some(path) => path,
-            None => continue,
-        };
-
-        let linked_kinds: Vec<String> = discovered_agents
-            .iter()
-            .filter(|agent| {
-                agent_project_paths
-                    .get(&agent.id)
-                    .is_some_and(|paths| paths.contains(folder_path))
-            })
-            .map(|agent| agent.kind.clone())
-            .collect();
-
-        let merged_servers =
-            collect_native_project_mcp_servers(&project_root, &linked_kinds);
-
-        if merged_servers.is_empty() {
-            continue;
-        }
-
-        scans.push(ProjectMcpScan {
-            project_id: *project_id,
-            project_name: project_name.clone(),
-            folder_path: folder_path.clone(),
-            servers: merged_servers,
-        });
-    }
-
-    for scan in &scans {
-        let fingerprint = format!("project-{}-import", scan.project_id);
-        let existed = db.find_preset_by_fingerprint(&fingerprint)?.is_some();
-        if import_native_mcp_servers_for_project(db, scan.project_id)
-            .map_err(|error| crate::error::AppError::Message(error))?
-        {
-            imported_project_ids.push(scan.project_id);
-            if !existed {
-                presets_created += 1;
-                assignments_created += 1;
+        for scan in &scans {
+            let fingerprint = format!("project-{}-import", scan.project_id);
+            let existed = db.find_preset_by_fingerprint(&fingerprint)?.is_some();
+            if import_native_mcp_servers_for_project(db, scan.project_id)
+                .map_err(|error| crate::error::AppError::Message(error))?
+            {
+                imported_project_ids.push(scan.project_id);
+                if !existed {
+                    presets_created += 1;
+                    assignments_created += 1;
+                }
             }
         }
     }

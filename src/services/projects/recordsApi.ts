@@ -10,6 +10,7 @@ export type ProjectRecord = {
   iconColor: string;
   createdAt: string;
   updatedAt: string;
+  diskSyncDirty?: boolean;
 };
 
 export const PROJECTS_CHANGED_EVENT = "projects-changed";
@@ -26,6 +27,7 @@ export function projectRecordToProject(record: ProjectRecord): Project {
     iconColor: resolveProjectIconColor(record.iconColor) as ProjectIconColor,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    diskSyncPending: record.diskSyncDirty ?? false,
   };
 }
 

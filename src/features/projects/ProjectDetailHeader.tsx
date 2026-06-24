@@ -4,6 +4,8 @@ import { colors } from "../../theme";
 
 type ProjectDetailHeaderProps = {
   projectName: string;
+  diskSyncPending?: boolean;
+  onRetryDiskSync?: () => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -25,6 +27,8 @@ const historyButtonStyle = {
 
 export function ProjectDetailHeader({
   projectName,
+  diskSyncPending = false,
+  onRetryDiskSync,
   canUndo,
   canRedo,
   onUndo,
@@ -48,6 +52,32 @@ export function ProjectDetailHeader({
       </Text>
 
       <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+        {diskSyncPending ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 6 }}>
+            <Text color={colors.warning} fontSize={12} fontWeight="500" select="none">
+              Disk sync pending
+            </Text>
+            {onRetryDiskSync ? (
+              <button
+                type="button"
+                onClick={onRetryDiskSync}
+                style={{
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: 6,
+                  background: colors.surface,
+                  color: colors.foreground,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: "2px 8px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <button
           type="button"
           aria-label="Undo server setting change"

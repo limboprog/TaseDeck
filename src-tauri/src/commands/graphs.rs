@@ -2,7 +2,7 @@ use crate::db::{AgentRecord, Database, GraphLinkInput, GraphState};
 use crate::error::AppResult;
 use crate::services::{
     filter_graph_eligible_agents, list_graph_eligible_mcp_ids, validate_graph_links,
-    McpToolsStore, TopologyRunStore,
+    McpToolsStore, ProjectDiskQueue, TopologyRunStore,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -21,13 +21,20 @@ pub fn graph_save_links(
     db: State<'_, Arc<Database>>,
     store: State<'_, Arc<McpToolsStore>>,
     run_store: State<'_, Arc<TopologyRunStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     client_id: String,
     name: String,
     links: Vec<GraphLinkInput>,
 ) -> AppResult<GraphState> {
     validate_graph_links(&db, store.inner(), &links)?;
     let state = db.replace_graph_links(&client_id, &name, &links)?;
-    run_store.refresh_if_running(&db, store.inner(), &client_id, &name);
+    run_store.refresh_if_running(
+        &db,
+        disk_queue.inner(),
+        store.inner(),
+        &client_id,
+        &name,
+    );
     Ok(state)
 }
 

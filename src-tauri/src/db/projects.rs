@@ -33,7 +33,7 @@ impl Database {
     pub fn list_project_records(&self) -> rusqlite::Result<Vec<ProjectRecord>> {
         let conn = self.conn.lock().expect("database mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT id, folder_path, name, icon_color, created_at, updated_at
+            "SELECT id, folder_path, name, icon_color, created_at, updated_at, disk_sync_dirty
              FROM projects
              ORDER BY updated_at DESC, id DESC",
         )?;
@@ -52,7 +52,7 @@ impl Database {
         };
         let conn = self.conn.lock().expect("database mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT id, folder_path, name, icon_color, created_at, updated_at
+            "SELECT id, folder_path, name, icon_color, created_at, updated_at, disk_sync_dirty
              FROM projects WHERE folder_path = ?1",
         )?;
         stmt.query_row(
@@ -121,15 +121,6 @@ impl Database {
     }
 
     pub fn delete_project_record(&self, id: i64) -> rusqlite::Result<bool> {
-        let disk_cleanup = if let Ok(Some(project)) = self.get_project_record(id) {
-            normalize_folder_path(project.folder_path.trim()).map(|root| {
-                let agents = self.list_project_agents(id).unwrap_or_default();
-                (root, agents)
-            })
-        } else {
-            None
-        };
-
         let affected = {
             let conn = self.conn.lock().expect("database mutex poisoned");
             conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?
@@ -139,16 +130,13 @@ impl Database {
             self.purge_orphaned_presets_after_project_delete(id)?;
         }
 
-        if let Some((root, agents)) = disk_cleanup {
-            for agent in &agents {
-                let _ = crate::agents::project_proxy_export::cleanup_tasedeck_project_agent_artifacts(
-                    &root,
-                    &agent.kind,
-                );
-            }
-        }
-
         Ok(affected > 0)
+    }
+
+    /// Disk restore targets collected before `delete_project_record` removes DB rows.
+    pub fn list_project_disk_restore_kinds(&self, id: i64) -> rusqlite::Result<Vec<String>> {
+        let agents = self.list_project_agents(id)?;
+        Ok(agents.into_iter().map(|agent| agent.kind).collect())
     }
 
     fn purge_orphaned_presets_after_project_delete(&self, project_id: i64) -> rusqlite::Result<()> {
@@ -286,6 +274,7 @@ impl Database {
             default_assignment: self.get_project_assignment_detail(id)?,
             agent_assignments,
             native_mcp_imported: false,
+            disk_sync_pending: false,
             default_source_mcp_json: self.get_project_default_source_mcp_json(id)?,
         }))
     }
@@ -888,6 +877,34 @@ impl Database {
         )?;
         Ok(affected > 0)
     }
+
+    pub fn set_project_disk_sync_dirty(&self, project_id: i64, dirty: bool) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        conn.execute(
+            "UPDATE projects SET disk_sync_dirty = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![i64::from(dirty), project_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn is_project_disk_sync_dirty(&self, project_id: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        conn.query_row(
+            "SELECT disk_sync_dirty FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+    }
+
+    pub fn list_disk_sync_dirty_project_ids(&self) -> rusqlite::Result<Vec<i64>> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id FROM projects WHERE disk_sync_dirty = 1 ORDER BY updated_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
 }
 
 fn build_project_assignment_detail(
@@ -933,7 +950,7 @@ fn fetch_project_record(
     id: i64,
 ) -> rusqlite::Result<Option<ProjectRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, folder_path, name, icon_color, created_at, updated_at
+        "SELECT id, folder_path, name, icon_color, created_at, updated_at, disk_sync_dirty
          FROM projects WHERE id = ?1",
     )?;
     stmt.query_row(params![id], map_project_row).optional()
@@ -947,5 +964,6 @@ fn map_project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectRecord> {
         icon_color: row.get(3)?,
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
+        disk_sync_dirty: row.get::<_, i64>(6)? != 0,
     })
 }

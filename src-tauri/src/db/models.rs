@@ -151,6 +151,8 @@ pub struct ProjectRecord {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub disk_sync_dirty: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -248,6 +250,8 @@ pub struct ProjectDetailRecord {
     pub default_assignment: Option<ProjectAssignmentDetail>,
     pub agent_assignments: Vec<ProjectAgentAssignmentDetail>,
     pub native_mcp_imported: bool,
+    #[serde(default)]
+    pub disk_sync_pending: bool,
     pub default_source_mcp_json: Option<String>,
 }
 

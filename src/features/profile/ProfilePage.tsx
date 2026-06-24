@@ -8,6 +8,7 @@ import { pageContentInsets } from "../../styles/layout";
 import { getUseOsKeyring, setUseOsKeyring } from "../../services/security/securityApi";
 import { mcpTableBackground } from "../mcp/mcpTableStyles";
 import { McpPanel } from "../mcp/McpPanel";
+import { NodeRuntimePanel } from "./NodeRuntimePanel";
 
 function SettingRow({
   title,
@@ -196,6 +197,8 @@ export function ProfilePage() {
           ) : null}
         </McpPanel>
       </YStack>
+
+      <NodeRuntimePanel />
     </YStack>
   );
 }

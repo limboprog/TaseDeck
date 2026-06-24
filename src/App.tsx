@@ -24,6 +24,15 @@ import {
 import { clearStoredPresets, getStoredPresets, notifyPresetsChanged } from "./services/presets/storage";
 import { runWorkspaceBootstrap, getWorkspaceBootstrapStatus } from "./services/workspace/bootstrapApi";
 import { WorkspaceBootstrapOverlay } from "./features/onboarding/WorkspaceBootstrapOverlay";
+import { InitialSetupOverlay } from "./features/onboarding/InitialSetupOverlay";
+import {
+  completeInitialSetup,
+  getAppSettings,
+  getNodeRuntimeStatus,
+  type AppSettings,
+} from "./services/app/appSettingsApi";
+import { showAppToast, ToastHost } from "./components/ToastHost";
+import { ProjectDiskJobFailureListener } from "./components/ProjectDiskJobFailureListener";
 import {
   defaultProjectsPageSession,
   PROJECTS_PAGE_SESSION_KEY,
@@ -108,78 +117,137 @@ function AppContent() {
   });
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapMessage, setBootstrapMessage] = useState("Scanning agents and projects…");
+  const [showInitialSetup, setShowInitialSetup] = useState(false);
+  const [appReady, setAppReady] = useState(false);
   const { colorScheme } = useThemeMode();
 
-  useEffect(() => {
-    void loadAgentCatalog();
-    void loadMcpTransportCatalog();
+  const runBootstrap = useCallback(async (cancelled: () => boolean) => {
+    try {
+      const status = await getWorkspaceBootstrapStatus();
+      if (status.completed || cancelled()) {
+        return;
+      }
+
+      setBootstrapping(true);
+      setBootstrapMessage("Scanning installed agents…");
+
+      const legacyProjects = getStoredProjects().map((project) => ({
+        name: project.name,
+        folderPath: project.folderPath,
+        iconColor: project.iconColor,
+      }));
+      const legacyPresets = getStoredPresets().map((preset) => ({
+        name: preset.name,
+        mcpServerIds: preset.mcpServerIds,
+      }));
+
+      const result = await runWorkspaceBootstrap({ legacyProjects, legacyPresets });
+
+      if (cancelled()) {
+        return;
+      }
+
+      if (legacyProjects.length > 0) {
+        clearStoredProjects();
+      }
+      if (legacyPresets.length > 0) {
+        clearStoredPresets();
+      }
+
+      setBootstrapMessage("Applying agent defaults…");
+      await finalizeDiscoveredAgents(result.agentIds);
+
+      setBootstrapMessage(
+        result.skipped
+          ? "Workspace is ready."
+          : `Found ${result.agentsDiscovered} agents, ${result.projectsUpserted} projects, ${result.presetsCreated} presets.`,
+      );
+
+      notifyAgentsChanged();
+      window.dispatchEvent(new CustomEvent("projects-changed"));
+      window.dispatchEvent(new CustomEvent("presets-changed"));
+    } catch (cause) {
+      console.error("Workspace bootstrap failed", cause);
+      if (!cancelled()) {
+        setBootstrapMessage("Workspace scan failed. You can continue manually.");
+      }
+    } finally {
+      if (!cancelled()) {
+        setBootstrapping(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const isCancelled = () => cancelled;
 
-    const bootstrap = async () => {
+    const initialize = async () => {
       try {
-        const status = await getWorkspaceBootstrapStatus();
-        if (status.completed || cancelled) {
-          return;
-        }
-
-        setBootstrapping(true);
-        setBootstrapMessage("Scanning installed agents…");
-
-        const legacyProjects = getStoredProjects().map((project) => ({
-          name: project.name,
-          folderPath: project.folderPath,
-          iconColor: project.iconColor,
-        }));
-        const legacyPresets = getStoredPresets().map((preset) => ({
-          name: preset.name,
-          mcpServerIds: preset.mcpServerIds,
-        }));
-
-        const result = await runWorkspaceBootstrap({ legacyProjects, legacyPresets });
-
+        const [settings, bootstrapStatus] = await Promise.all([
+          getAppSettings(),
+          getWorkspaceBootstrapStatus(),
+        ]);
         if (cancelled) {
           return;
         }
 
-        if (legacyProjects.length > 0) {
-          clearStoredProjects();
+        if (!settings.setupCompleted) {
+          if (bootstrapStatus.completed) {
+            await completeInitialSetup({ ...settings, setupCompleted: true });
+          } else {
+            setShowInitialSetup(true);
+            setAppReady(true);
+            return;
+          }
         }
-        if (legacyPresets.length > 0) {
-          clearStoredPresets();
-        }
 
-        setBootstrapMessage("Applying agent defaults…");
-        await finalizeDiscoveredAgents(result.agentIds);
-
-        setBootstrapMessage(
-          result.skipped
-            ? "Workspace is ready."
-            : `Found ${result.agentsDiscovered} agents, ${result.projectsUpserted} projects, ${result.presetsCreated} presets.`,
-        );
-
-        notifyAgentsChanged();
-        window.dispatchEvent(new CustomEvent("projects-changed"));
-        window.dispatchEvent(new CustomEvent("presets-changed"));
+        setAppReady(true);
+        await runBootstrap(isCancelled);
       } catch (cause) {
-        console.error("Workspace bootstrap failed", cause);
-        if (!cancelled) {
-          setBootstrapMessage("Workspace scan failed. You can continue manually.");
-        }
-      } finally {
-        if (!cancelled) {
-          setBootstrapping(false);
-        }
+        console.error("App initialization failed", cause);
+        setAppReady(true);
       }
     };
 
-    void bootstrap();
+    void initialize();
 
     return () => {
       cancelled = true;
     };
+  }, [runBootstrap]);
+
+  const handleInitialSetupComplete = useCallback(
+    async (settings: AppSettings) => {
+      try {
+        await completeInitialSetup(settings);
+        setShowInitialSetup(false);
+        setAppReady(true);
+        await runBootstrap(() => false);
+      } catch (cause) {
+        console.error("Failed to save initial setup", cause);
+        showAppToast("Failed to save initial setup. Please try again.");
+      }
+    },
+    [runBootstrap],
+  );
+
+  useEffect(() => {
+    if (!appReady || showInitialSetup) {
+      return;
+    }
+    void getNodeRuntimeStatus().then((status) => {
+      if (!status.found) {
+        showAppToast(
+          "Node.js is missing or invalid. MCP proxies may fail until you fix the path in Profile.",
+        );
+      }
+    });
+  }, [appReady, showInitialSetup]);
+
+  useEffect(() => {
+    void loadAgentCatalog();
+    void loadMcpTransportCatalog();
   }, []);
 
   useEffect(() => {
@@ -251,7 +319,12 @@ function AppContent() {
               onNavigate={handleNavigate}
             />
           </AppShell>
+          {showInitialSetup ? (
+            <InitialSetupOverlay onComplete={(settings) => void handleInitialSetupComplete(settings)} />
+          ) : null}
           {bootstrapping ? <WorkspaceBootstrapOverlay message={bootstrapMessage} /> : null}
+          <ToastHost />
+          <ProjectDiskJobFailureListener />
         </YStack>
       </SurfaceModeProvider>
     </TamaguiProvider>

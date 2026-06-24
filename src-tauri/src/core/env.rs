@@ -1,3 +1,4 @@
+use crate::core::node_runtime::resolve_node_executable;
 use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
@@ -41,6 +42,15 @@ pub fn enriched_path() -> String {
         }
         if seen.insert(normalized.clone()) {
             parts.push(normalized);
+        }
+    }
+
+    if let Some(node_path) = resolve_node_executable() {
+        if let Some(parent) = node_path.parent() {
+            let normalized = parent.to_string_lossy().into_owned();
+            if !normalized.is_empty() && seen.insert(normalized.clone()) {
+                parts.insert(0, normalized);
+            }
         }
     }
 

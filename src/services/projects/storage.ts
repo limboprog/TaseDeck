@@ -76,6 +76,7 @@ export function createProject(draft: ProjectDraft): Project {
     iconColor: draft.iconColor ?? pickRandomProjectIconColor(),
     createdAt: now,
     updatedAt: now,
+    diskSyncPending: false,
   };
 }
 

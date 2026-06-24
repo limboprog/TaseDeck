@@ -9,7 +9,10 @@ use commands::{
     agent_record_create, agent_record_delete, agent_record_get, agent_record_list,
     agent_record_read_mcp_json, agent_record_update, agent_record_write_mcp_json,
     agents_ensure_mcp_json, agents_get_config, agents_list_catalog,
-    agents_read_mcp_json, agents_resolve_auto_path, graph_delete, graph_get_state,
+    agents_read_mcp_json, agents_resolve_auto_path, app_complete_initial_setup,
+    app_download_node_runtime, app_get_node_runtime_status, app_get_settings,
+    app_save_setup_settings, app_set_node_path, app_validate_node_path,
+    graph_delete, graph_get_state,
     graph_list_placeable_agents, graph_list_placeable_mcp_ids, graph_save_links,     mcp_add_from_registry,
     mcp_add_server, mcp_analyze_server, mcp_compile_run_command, mcp_ensure_tools, mcp_get_server,
     mcp_get_tools,
@@ -32,15 +35,17 @@ use commands::{
     project_record_delete_custom_preset,
     project_record_reset_agent,
     project_record_unlink_agent, project_record_export_proxy_config,
+    project_record_retry_export,
     workspace_bootstrap,
     workspace_get_bootstrap_status,
 };
-use services::{ensure_initialized, OAuthStore, ProxyLogIngestor, ProxyOAuthRefresher, UsageLogStore};
+use core::child_guard::kill_all_registered_children;
+use services::{ensure_initialized, OAuthStore, ProjectDiskQueue, ProxyLogIngestor, ProxyOAuthRefresher, UsageLogStore};
 use core::fs::{ensure_user_storage_dir, user_database_path};
 use db::Database;
 use services::{McpToolsStore, TopologyRunStore};
 use std::sync::Arc;
-use tauri::{AppHandle, Listener, Manager};
+use tauri::{AppHandle, Listener, Manager, RunEvent, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 fn focus_main_window(app: &AppHandle) {
@@ -86,8 +91,19 @@ pub fn run() {
             tools_store.attach_oauth(Arc::clone(&oauth));
             let usage_log = Arc::new(UsageLogStore::new(Arc::clone(&db)));
             usage_log.attach_app(app.handle().clone());
+            let disk_queue = Arc::new(ProjectDiskQueue::new(
+                Arc::clone(&db),
+                Arc::clone(&oauth),
+                Arc::clone(&tools_store),
+            ));
+            disk_queue.attach_app(app.handle().clone());
+            disk_queue.hydrate_dirty_from_db();
+            disk_queue.retry_all_dirty_projects();
+            let settings = core::app_settings::reload_app_settings()?;
             let proxy_log_ingestor = Arc::new(ProxyLogIngestor::new(Arc::clone(&usage_log)));
-            proxy_log_ingestor.start_background();
+            if settings.enable_log_collection {
+                proxy_log_ingestor.start_background();
+            }
             let proxy_oauth_refresher = Arc::new(ProxyOAuthRefresher::new(Arc::clone(&oauth)));
             proxy_oauth_refresher.start_background();
             app.manage(db);
@@ -95,9 +111,17 @@ pub fn run() {
             app.manage(tools_store);
             app.manage(Arc::new(TopologyRunStore::new()));
             app.manage(usage_log);
+            app.manage(disk_queue);
             app.manage(proxy_log_ingestor);
             app.manage(proxy_oauth_refresher);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Focused(true) = event {
+                if let Some(disk_queue) = window.try_state::<Arc<ProjectDiskQueue>>() {
+                    disk_queue.retry_all_dirty_projects();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             agent_record_list,
@@ -172,14 +196,33 @@ pub fn run() {
             project_record_unlink_agent,
             project_record_link_agent,
             project_record_export_proxy_config,
+            project_record_retry_export,
             preset_record_list,
             preset_record_create,
             preset_record_update,
             preset_record_delete,
             preset_record_try_delete,
+            app_get_settings,
+            app_save_setup_settings,
+            app_set_node_path,
+            app_validate_node_path,
+            app_get_node_runtime_status,
+            app_download_node_runtime,
+            app_complete_initial_setup,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
+                if let Some(tools) = app_handle.try_state::<Arc<McpToolsStore>>() {
+                    tools.shutdown_all();
+                }
+                if let Some(ingestor) = app_handle.try_state::<Arc<ProxyLogIngestor>>() {
+                    ingestor.stop();
+                }
+                kill_all_registered_children();
+            }
+        });
 }
 
 fn init_database() -> crate::error::AppResult<Database> {

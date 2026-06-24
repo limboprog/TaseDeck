@@ -1,3 +1,4 @@
+use crate::core::child_guard::{apply_parent_death_signal, stop_child};
 use crate::core::env::{apply_process_env, shell_command_builder};
 use crate::core::process::hide_console_window;
 use crate::db::McpServer;
@@ -70,6 +71,15 @@ impl McpToolsStore {
 
     fn oauth(&self) -> Option<Arc<OAuthStore>> {
         self.oauth.get().cloned()
+    }
+
+    pub fn shutdown_all(&self) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            let server_ids: Vec<i64> = sessions.keys().copied().collect();
+            for server_id in server_ids {
+                stop_session(&mut sessions, server_id);
+            }
+        }
     }
 
     pub fn register_server(&self, server: &McpServer) {
@@ -234,9 +244,8 @@ fn stop_session(sessions: &mut HashMap<i64, StoredSession>, server_id: i64) {
                 remote.terminate_session();
             }
         }
-        if let Some(mut child) = session.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(child) = session.child.take() {
+            stop_child(child);
         }
     }
 }
@@ -682,9 +691,12 @@ fn spawn_shell_command(shell: &str, extra_env: &HashMap<String, String>) -> Resu
         command_builder.env(key, value);
     }
     command_builder.arg(shell);
-    command_builder
+    apply_parent_death_signal(&mut command_builder);
+    let child = command_builder
         .spawn()
-        .map_err(|error| format!("failed to spawn MCP shell process: {error}"))
+        .map_err(|error| format!("failed to spawn MCP shell process: {error}"))?;
+    crate::core::child_guard::register_child_pid(child.id());
+    Ok(child)
 }
 
 fn spawn_direct_process(
@@ -703,9 +715,12 @@ fn spawn_direct_process(
     for (key, value) in env {
         command_builder.env(key, value);
     }
-    command_builder
+    apply_parent_death_signal(&mut command_builder);
+    let child = command_builder
         .spawn()
-        .map_err(|error| format!("failed to spawn MCP process: {error}"))
+        .map_err(|error| format!("failed to spawn MCP process: {error}"))?;
+    crate::core::child_guard::register_child_pid(child.id());
+    Ok(child)
 }
 
 fn child_exit_detail(child: &mut Child) -> String {
@@ -1016,24 +1031,29 @@ pub fn probe_mcp_operation(
         _ => Err(format!("unknown probe operation: {operation}")),
     };
 
-    let _ = child.kill();
+    let probe_result = match probe_result {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let detail = child_exit_detail(&mut child);
+            Err(if detail.is_empty() {
+                error
+            } else {
+                format!("{error} ({detail})")
+            })
+        }
+    };
+
+    stop_child(child);
 
     match probe_result {
         Ok(result) => McpProbeResult {
             success: true,
             result,
         },
-        Err(error) => {
-            let detail = child_exit_detail(&mut child);
-            McpProbeResult {
-                success: false,
-                result: if detail.is_empty() {
-                    error
-                } else {
-                    format!("{error} ({detail})")
-                },
-            }
-        }
+        Err(error) => McpProbeResult {
+            success: false,
+            result: error,
+        },
     }
 }
 

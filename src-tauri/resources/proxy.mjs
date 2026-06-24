@@ -21,6 +21,8 @@ const RECONNECT_MAX_ATTEMPTS = 6;
 const RECONNECT_BASE_DELAY_MS = 750;
 const RECONNECT_MAX_DELAY_MS = 10_000;
 const OAUTH_REFRESH_WAIT_MS = 12_000;
+const DOWNSTREAM_REQUEST_TIMEOUT_MS = 60_000;
+const TOOLS_REFRESH_MIN_INTERVAL_MS = 5_000;
 
 function platformDataDir() {
   const home = os.homedir();
@@ -165,14 +167,26 @@ function saveToolsCache() {
     return;
   }
   try {
-    fs.mkdirSync(path.dirname(toolsCacheFilePath()), { recursive: true });
-    fs.writeFileSync(
-      toolsCacheFilePath(),
-      `${JSON.stringify({ tools: cachedTools, cachedAt: new Date().toISOString() }, null, 2)}\n`,
-      "utf8",
-    );
+    const target = toolsCacheFilePath();
+    const payload = `${JSON.stringify({ tools: cachedTools, cachedAt: new Date().toISOString() }, null, 2)}\n`;
+    atomicWriteFileSync(target, payload);
   } catch (error) {
     log("WARN", "failed to save tools cache", { message: errorMessage(error) });
+  }
+}
+
+function atomicWriteFileSync(targetPath, contents) {
+  const dir = path.dirname(targetPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, contents, "utf8");
+  try {
+    fs.renameSync(tempPath, targetPath);
+  } catch (error) {
+    if (fs.existsSync(targetPath)) {
+      fs.unlinkSync(targetPath);
+    }
+    fs.renameSync(tempPath, targetPath);
   }
 }
 
@@ -202,6 +216,12 @@ let cachedTools = [];
 let lastActivityAt = Date.now();
 let idleTimer = null;
 let shuttingDown = false;
+let lastToolsRefreshAt = 0;
+/** @type {Promise<unknown> | null} */
+let toolsRefreshInFlight = null;
+
+const usageLogQueue = [];
+let usageLogFlushScheduled = false;
 
 function log(level, message, extra) {
   const ts = new Date().toISOString();
@@ -418,16 +438,29 @@ async function runWithReconnect(label, fn) {
 }
 
 function appendUsageLog(entry) {
-  const logFile = proxySpoolPath(config.projectId, config.serverName || SERVER_LABEL);
-  if (!logFile) {
+  usageLogQueue.push(entry);
+  if (usageLogFlushScheduled) {
     return;
   }
-  try {
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.appendFileSync(logFile, `${JSON.stringify(entry)}\n`, "utf8");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log("WARN", "failed to append usage log", { message });
+  usageLogFlushScheduled = true;
+  setImmediate(flushUsageLogQueue);
+}
+
+function flushUsageLogQueue() {
+  usageLogFlushScheduled = false;
+  while (usageLogQueue.length > 0) {
+    const entry = usageLogQueue.shift();
+    const logFile = proxySpoolPath(config.projectId, config.serverName || SERVER_LABEL);
+    if (!logFile) {
+      continue;
+    }
+    try {
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      fs.appendFileSync(logFile, `${JSON.stringify(entry)}\n`, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log("WARN", "failed to append usage log", { message });
+    }
   }
 }
 
@@ -518,14 +551,22 @@ async function remoteJsonRpcRequest(method, params = {}) {
   }
 
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DOWNSTREAM_REQUEST_TIMEOUT_MS);
   try {
     response = await fetch(remoteDownstream.url, {
       method: "POST",
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      signal: controller.signal,
     });
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`remote MCP request timed out after ${DOWNSTREAM_REQUEST_TIMEOUT_MS}ms`);
+    }
     throw new Error(`remote MCP request failed: ${errorMessage(error)}`);
+  } finally {
+    clearTimeout(timeout);
   }
 
   const sessionId = response.headers.get("mcp-session-id");
@@ -717,21 +758,49 @@ function downstreamRequest(method, params = {}) {
   const id = downstreamNextId;
   downstreamNextId += 1;
   return new Promise((resolve, reject) => {
-    downstreamPending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      downstreamPending.delete(id);
+      reject(new Error(`downstream request timed out after ${DOWNSTREAM_REQUEST_TIMEOUT_MS}ms`));
+    }, DOWNSTREAM_REQUEST_TIMEOUT_MS);
+    downstreamPending.set(id, {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    });
     downstream.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
   });
 }
 
 async function refreshToolsFromDownstream() {
-  const tools = await runWithReconnect("tools/list", async () => {
-    await ensureDownstream();
-    const result = await downstreamRequest("tools/list", {});
-    const listed = Array.isArray(result?.tools) ? result.tools : [];
-    return listed.filter((tool) => tool?.name);
+  const now = Date.now();
+  if (now - lastToolsRefreshAt < TOOLS_REFRESH_MIN_INTERVAL_MS) {
+    return cachedTools;
+  }
+  if (toolsRefreshInFlight) {
+    return toolsRefreshInFlight;
+  }
+
+  toolsRefreshInFlight = (async () => {
+    const tools = await runWithReconnect("tools/list", async () => {
+      await ensureDownstream();
+      const result = await downstreamRequest("tools/list", {});
+      const listed = Array.isArray(result?.tools) ? result.tools : [];
+      return listed.filter((tool) => tool?.name);
+    });
+    cachedTools = tools;
+    saveToolsCache();
+    lastToolsRefreshAt = Date.now();
+    return cachedTools;
+  })().finally(() => {
+    toolsRefreshInFlight = null;
   });
-  cachedTools = tools;
-  saveToolsCache();
-  return cachedTools;
+
+  return toolsRefreshInFlight;
 }
 
 function normalizeToolForList(tool) {

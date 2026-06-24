@@ -7,6 +7,7 @@ export type Project = {
   iconColor: ProjectIconColor;
   createdAt: string;
   updatedAt: string;
+  diskSyncPending: boolean;
 };
 
 export type ProjectDraft = {

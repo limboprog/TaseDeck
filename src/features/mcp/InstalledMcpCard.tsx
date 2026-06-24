@@ -912,7 +912,7 @@ export function InstalledMcpCard({
                 }
                 toolEnabled={toolEnabled}
                 onToggleTool={toggleTool}
-                showToggles={!isNew}
+                showToggles={false}
               />
               <McpServerTestSection
                 serverId={server.id}

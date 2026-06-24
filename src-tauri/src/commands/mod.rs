@@ -1,5 +1,6 @@
 pub mod agent_records;
 pub mod agents;
+pub mod app_setup;
 pub mod graphs;
 pub mod mcp;
 pub mod mcp_oauth;
@@ -9,6 +10,10 @@ pub mod topology;
 pub mod usage;
 pub mod workspace;
 
+pub use app_setup::{
+    app_complete_initial_setup, app_download_node_runtime, app_get_node_runtime_status,
+    app_get_settings, app_save_setup_settings, app_set_node_path, app_validate_node_path,
+};
 pub use agent_records::{
     agent_record_create, agent_record_delete, agent_record_get, agent_record_list,
     agent_record_read_mcp_json, agent_record_update, agent_record_write_mcp_json,
@@ -49,5 +54,6 @@ pub use workspace::{
     project_record_update_assignment,
     project_record_use_custom_preset, project_record_use_default_preset,
     project_record_delete_custom_preset,
-    project_record_export_proxy_config, workspace_bootstrap, workspace_get_bootstrap_status,
+    project_record_export_proxy_config, project_record_retry_export,
+    workspace_bootstrap, workspace_get_bootstrap_status,
 };

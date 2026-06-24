@@ -213,6 +213,22 @@ function ProjectsNavGroup({
           key={project.id}
           label={project.name}
           leading={<IoCubeOutline size={18} color={project.iconColor} />}
+          trailing={
+            project.diskSyncPending ? (
+              <span
+                title="Disk sync pending"
+                aria-label="Disk sync pending"
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: colors.warning,
+                  display: "inline-block",
+                  flexShrink: 0,
+                }}
+              />
+            ) : null
+          }
           active={activeId === "projects" && selectedProjectId === project.id}
           collapsed={collapsed}
           onPress={() => onSelectProject(project.id)}

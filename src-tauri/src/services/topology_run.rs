@@ -1,9 +1,9 @@
 use crate::agents::mcp_json::{
     build_proxy_entries_for_agent, sync_topology_mcp_json_for_graph,
-    sync_topology_project_mcp_json_for_graph,
 };
 use crate::db::mcp_config::is_mcp_server_configured;
 use crate::db::{Database, GraphServerLink};
+use crate::services::project_disk_queue::{enqueue_topology_project_disk_jobs, ProjectDiskQueue};
 use crate::services::{McpProxyServerEntry, McpToolsStore, UsageLogStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,6 +59,7 @@ impl TopologyRunStore {
     pub fn start(
         &self,
         db: &Database,
+        disk_queue: &ProjectDiskQueue,
         _store: Arc<McpToolsStore>,
         _usage_log: Arc<UsageLogStore>,
         client_id: &str,
@@ -69,7 +70,7 @@ impl TopologyRunStore {
             return Err("client_id must not be empty".to_string());
         }
 
-        self.stop(db, client_id, name)?;
+        self.stop(db, disk_queue, client_id, name)?;
 
         let graph_state = db
             .get_graph_state_by_client_id(client_id, name)
@@ -80,9 +81,7 @@ impl TopologyRunStore {
 
         let mcp_json_paths =
             sync_topology_mcp_json_for_graph(db, client_id, name, true).unwrap_or_default();
-        let project_mcp_paths =
-            sync_topology_project_mcp_json_for_graph(db, client_id, name, true)
-                .unwrap_or_default();
+        enqueue_topology_project_disk_jobs(db, disk_queue, client_id, name, true)?;
 
         self.runs
             .lock()
@@ -91,17 +90,20 @@ impl TopologyRunStore {
 
         let proxy_entries = collect_exported_proxy_entries(db, client_id, name)?;
         let mut status = status_for(db, client_id, name, true, None, &proxy_entries)?;
-        status.mcp_json_paths = mcp_json_paths
-            .into_iter()
-            .chain(project_mcp_paths)
-            .collect();
+        status.mcp_json_paths = mcp_json_paths;
         Ok(status)
     }
 
-    pub fn stop(&self, db: &Database, client_id: &str, name: &str) -> Result<(), String> {
+    pub fn stop(
+        &self,
+        db: &Database,
+        disk_queue: &ProjectDiskQueue,
+        client_id: &str,
+        name: &str,
+    ) -> Result<(), String> {
         let client_id = client_id.trim();
         let _ = sync_topology_mcp_json_for_graph(db, client_id, name, false);
-        let _ = sync_topology_project_mcp_json_for_graph(db, client_id, name, false);
+        let _ = enqueue_topology_project_disk_jobs(db, disk_queue, client_id, name, false);
         self.runs
             .lock()
             .map_err(|_| "topology run store lock poisoned".to_string())?
@@ -131,7 +133,14 @@ impl TopologyRunStore {
         status_for(db, client_id, name, running, None, &proxy_entries)
     }
 
-    pub fn refresh_if_running(&self, db: &Database, _store: &McpToolsStore, client_id: &str, name: &str) {
+    pub fn refresh_if_running(
+        &self,
+        db: &Database,
+        disk_queue: &ProjectDiskQueue,
+        _store: &McpToolsStore,
+        client_id: &str,
+        name: &str,
+    ) {
         let is_running = self
             .runs
             .lock()
@@ -142,7 +151,7 @@ impl TopologyRunStore {
         }
 
         let _ = sync_topology_mcp_json_for_graph(db, client_id, name, true);
-        let _ = sync_topology_project_mcp_json_for_graph(db, client_id, name, true);
+        let _ = enqueue_topology_project_disk_jobs(db, disk_queue, client_id, name, true);
     }
 }
 

@@ -8,7 +8,7 @@ use crate::services::{
     compile_run_command_template_from_config_values, list_mcp_run_transports, mcp_server_for_runtime,
     probe_mcp_operation, reveal_config_values_for_api, seal_config_values_for_storage,
     McpProbeResult, McpServerAnalysis, McpServerApi, McpServerToolsSnapshot, McpToolsStore,
-    McpTransportCatalogEntry, OAuthStore, ProxyLogIngestor, RegistryEntry, RegistryInstallPlan,
+    McpTransportCatalogEntry, OAuthStore, ProjectDiskQueue, ProxyLogIngestor, RegistryEntry, RegistryInstallPlan,
     UsageLogStore,
 };
 use std::sync::Arc;
@@ -300,20 +300,14 @@ pub fn mcp_get_tool_prefs(
 #[tauri::command]
 pub fn mcp_set_tool_pref(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     ingestor: State<'_, Arc<ProxyLogIngestor>>,
     server_id: i64,
     tool_name: String,
     enabled: bool,
 ) -> AppResult<bool> {
     db.set_mcp_tool_pref(server_id, &tool_name, enabled)?;
-    schedule_projects_using_server_export(
-        Arc::clone(db.inner()),
-        Arc::clone(oauth.inner()),
-        Arc::clone(tools_store.inner()),
-        server_id,
-    );
+    schedule_projects_using_server_export(disk_queue.inner(), server_id);
     let _ = ingestor.poll_once();
     Ok(true)
 }
@@ -321,19 +315,13 @@ pub fn mcp_set_tool_pref(
 #[tauri::command]
 pub fn mcp_replace_tool_prefs(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     ingestor: State<'_, Arc<ProxyLogIngestor>>,
     server_id: i64,
     prefs: std::collections::HashMap<String, bool>,
 ) -> AppResult<bool> {
     db.replace_mcp_tool_prefs(server_id, &prefs)?;
-    schedule_projects_using_server_export(
-        Arc::clone(db.inner()),
-        Arc::clone(oauth.inner()),
-        Arc::clone(tools_store.inner()),
-        server_id,
-    );
+    schedule_projects_using_server_export(disk_queue.inner(), server_id);
     let _ = ingestor.poll_once();
     Ok(true)
 }

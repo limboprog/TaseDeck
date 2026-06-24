@@ -520,8 +520,7 @@ fn upsert_proxy_entries_in_codex_toml(
     entries: &[McpProxyServerEntry],
 ) -> Result<(), String> {
     let mut doc: TomlTable = if path.is_file() {
-        let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
-        toml::from_str(&raw).map_err(|error| format!("invalid config.toml: {error}"))?
+        read_codex_toml_table(path)?
     } else {
         TomlTable::new()
     };
@@ -552,9 +551,7 @@ fn remove_tasedeck_managed_from_codex_toml(path: &Path) -> Result<(), String> {
     if !path.is_file() {
         return Ok(());
     }
-    let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let mut doc: TomlTable =
-        toml::from_str(&raw).map_err(|error| format!("invalid config.toml: {error}"))?;
+    let mut doc: TomlTable = read_codex_toml_table(path)?;
     if let Some(TomlValue::Table(mcp_servers)) = doc.get_mut("mcp_servers") {
         mcp_servers.retain(|key, value| {
             !is_tasedeck_topology_entry_key(key)
@@ -630,14 +627,17 @@ pub fn ensure_agent_mcp_json(agent_kind: &str, config_dir: &Path) -> Result<Path
     let path = config_dir.join(&file_name);
     if !path.is_file() {
         if is_toml {
-            fs::write(
+            crate::core::atomic_write::atomic_write(
                 &path,
-                "# MCP servers: use `codex mcp add` or [mcp_servers.*] tables\n",
+                b"# MCP servers: use `codex mcp add` or [mcp_servers.*] tables\n",
             )
             .map_err(|error| error.to_string())?;
         } else {
-            fs::write(&path, default_mcp_json_template(agent_kind))
-                .map_err(|error| error.to_string())?;
+            crate::core::atomic_write::atomic_write(
+                &path,
+                default_mcp_json_template(agent_kind).as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
         }
     }
     Ok(path)
@@ -658,8 +658,7 @@ pub fn read_agent_mcp_config_as_json(path: &Path, kind: &str) -> Result<Option<V
     }
 
     if kind == "codex-cli" || path.extension().is_some_and(|ext| ext == "toml") {
-        let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
-        let doc: TomlTable = toml::from_str(&raw).map_err(|error| format!("invalid config.toml: {error}"))?;
+        let doc = read_codex_toml_table(path)?;
         return Ok(Some(codex_toml_to_json(&doc)));
     }
 
@@ -725,8 +724,7 @@ fn upsert_topology_in_codex_toml(
     aggregator: &TopologyAggregatorConfig,
 ) -> Result<(), String> {
     let mut doc: TomlTable = if path.is_file() {
-        let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
-        toml::from_str(&raw).map_err(|error| format!("invalid config.toml: {error}"))?
+        read_codex_toml_table(path)?
     } else {
         TomlTable::new()
     };
@@ -771,18 +769,37 @@ fn upsert_topology_in_codex_toml(
 }
 
 fn remove_topology_from_codex_toml(path: &Path) -> Result<(), String> {
-    let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let mut doc: TomlTable =
-        toml::from_str(&raw).map_err(|error| format!("invalid config.toml: {error}"))?;
+    let mut doc: TomlTable = read_codex_toml_table(path)?;
     if let Some(TomlValue::Table(mcp_servers)) = doc.get_mut("mcp_servers") {
         mcp_servers.retain(|key, _| !is_tasedeck_topology_entry_key(key));
     }
     write_codex_toml(path, &doc)
 }
 
+fn read_codex_toml_table(path: &Path) -> Result<toml::map::Map<String, toml::Value>, String> {
+    if !path.is_file() {
+        return Ok(TomlTable::new());
+    }
+    let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    if raw.trim().is_empty() {
+        return Ok(TomlTable::new());
+    }
+    match toml::from_str::<TomlTable>(&raw) {
+        Ok(doc) => Ok(doc),
+        Err(error) => {
+            backup_corrupt_config_file(path, "toml")?;
+            eprintln!(
+                "[tasedeck] ignoring corrupt TOML at {} ({error}); starting from empty table",
+                path.display()
+            );
+            Ok(TomlTable::new())
+        }
+    }
+}
+
 fn write_codex_toml(path: &Path, doc: &TomlTable) -> Result<(), String> {
     let payload = toml::to_string_pretty(doc).map_err(|error| error.to_string())?;
-    fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())
+    crate::core::atomic_write::atomic_write(path, format!("{payload}\n").as_bytes())
 }
 
 fn read_mcp_json_object(path: &Path) -> Result<Map<String, Value>, String> {
@@ -791,18 +808,55 @@ fn read_mcp_json_object(path: &Path) -> Result<Map<String, Value>, String> {
     }
 
     let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let value: Value =
-        serde_json::from_str(&raw).map_err(|error| format!("invalid mcp.json: {error}"))?;
+    if raw.trim().is_empty() {
+        return Ok(Map::new());
+    }
 
-    value
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "mcp.json root must be an object".to_string())
+    let value: Value = match serde_json::from_str(&raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            backup_corrupt_config_file(path, "json")?;
+            eprintln!(
+                "[tasedeck] ignoring corrupt JSON at {} ({error}); starting from empty object",
+                path.display()
+            );
+            return Ok(Map::new());
+        }
+    };
+
+    match value.as_object().cloned() {
+        Some(object) => Ok(object),
+        None => {
+            backup_corrupt_config_file(path, "json")?;
+            eprintln!(
+                "[tasedeck] ignoring non-object JSON root at {}; starting from empty object",
+                path.display()
+            );
+            Ok(Map::new())
+        }
+    }
+}
+
+fn backup_corrupt_config_file(path: &Path, kind: &str) -> Result<(), String> {
+    let backup = path.with_extension(format!("tasedeck.corrupt.{kind}.bak"));
+    if backup.exists() {
+        let _ = fs::remove_file(&backup);
+    }
+    if path.is_file() {
+        fs::rename(path, &backup).map_err(|error| {
+            format!(
+                "failed to backup corrupt config {} -> {}: {error}",
+                path.display(),
+                backup.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn write_mcp_json(path: &Path, root: &Map<String, Value>) -> Result<(), String> {
     let payload = serde_json::to_string_pretty(root).map_err(|error| error.to_string())?;
-    fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())
+    crate::core::atomic_write::atomic_write(path, format!("{payload}\n").as_bytes())
 }
 
 pub fn write_mcp_json_value(path: &Path, root: &Value) -> Result<(), String> {

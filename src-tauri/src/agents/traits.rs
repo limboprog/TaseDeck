@@ -72,19 +72,16 @@ pub trait AgentConfigProvider: Send + Sync {
         std::fs::create_dir_all(&config_dir)?;
         let mcp_path = config_dir.join(self.mcp_config_file_name());
         if !mcp_path.is_file() {
-            if self.mcp_config_file_name() == "mcp.json" {
-                let template = crate::agents::mcp_json::default_mcp_json_template(self.kind());
-                std::fs::write(&mcp_path, template)?;
+            let content = if self.mcp_config_file_name() == "mcp.json" {
+                crate::agents::mcp_json::default_mcp_json_template(self.kind())
             } else if self.mcp_config_file_name().ends_with(".toml") {
-                std::fs::write(
-                    &mcp_path,
-                    "# MCP servers: use `codex mcp add` or edit [mcp_servers.*] tables\n",
-                )?;
+                "# MCP servers: use `codex mcp add` or edit [mcp_servers.*] tables\n".to_string()
             } else {
                 let root_key = self.mcp_json_servers_key();
-                let template = format!("{{\n  \"{root_key}\": {{}}\n}}\n");
-                std::fs::write(&mcp_path, template)?;
-            }
+                format!("{{\n  \"{root_key}\": {{}}\n}}\n")
+            };
+            crate::core::atomic_write::atomic_write(&mcp_path, content.as_bytes())
+                .map_err(|error| crate::error::AppError::Message(error))?;
         }
         Ok(mcp_path)
     }

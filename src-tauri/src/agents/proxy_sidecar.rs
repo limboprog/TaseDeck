@@ -100,7 +100,7 @@ pub fn write_tools_cache(
         "cachedAt": chrono_lite_now(),
     });
     let text = serde_json::to_string_pretty(&payload).map_err(|error| error.to_string())?;
-    fs::write(&path, format!("{text}\n")).map_err(|error| error.to_string())?;
+    crate::core::atomic_write::atomic_write(&path, format!("{text}\n").as_bytes())?;
     Ok(path)
 }
 
@@ -326,7 +326,7 @@ pub fn write_sidecar_config(path: &Path, config: &ProxySidecarConfig) -> Result<
     }
 
     let payload = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
-    fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())
+    crate::core::atomic_write::atomic_write(path, format!("{payload}\n").as_bytes())
 }
 
 pub fn write_sidecar_for_server(

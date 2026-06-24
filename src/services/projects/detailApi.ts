@@ -29,6 +29,7 @@ export type ProjectDetail = {
   agentAssignments: ProjectAgentAssignment[];
   nativeMcpImported: boolean;
   defaultSourceMcpJson: string | null;
+  diskSyncPending: boolean;
 };
 
 export type AgentPresetMode = "default" | "custom";
@@ -97,6 +98,7 @@ type ProjectDetailRecord = {
     }>;
   } | null;
   nativeMcpImported?: boolean;
+  diskSyncPending?: boolean;
   defaultSourceMcpJson?: string | null;
   /** Legacy single-assignment payload from older backend builds. */
   assignment?: {
@@ -134,6 +136,7 @@ function mapProjectDetail(record: ProjectDetailRecord): ProjectDetail {
     agentAssignments,
     nativeMcpImported: record.nativeMcpImported ?? false,
     defaultSourceMcpJson: record.defaultSourceMcpJson ?? null,
+    diskSyncPending: record.diskSyncPending ?? false,
   };
 }
 
@@ -339,5 +342,15 @@ export async function exportProjectProxyConfig(
   return invoke<string[]>("project_record_export_proxy_config", {
     projectId: numericProjectId,
     agentId: agentId ?? null,
+  });
+}
+
+export async function retryProjectDiskExport(projectId: string): Promise<boolean> {
+  const numericProjectId = Number(projectId);
+  if (!Number.isFinite(numericProjectId) || numericProjectId <= 0) {
+    return false;
+  }
+  return invoke<boolean>("project_record_retry_export", {
+    projectId: numericProjectId,
   });
 }

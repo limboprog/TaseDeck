@@ -409,7 +409,23 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     projects::ensure_projects_tables(conn)?;
     presets::ensure_presets_tables(conn)?;
     migrate_agent_project_preset_assignments(conn)?;
+    migrate_projects_disk_sync_dirty(conn)?;
 
+    Ok(())
+}
+
+fn migrate_projects_disk_sync_dirty(conn: &Connection) -> rusqlite::Result<()> {
+    let has_disk_sync_dirty: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'disk_sync_dirty'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_disk_sync_dirty == 0 {
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN disk_sync_dirty INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     Ok(())
 }
 

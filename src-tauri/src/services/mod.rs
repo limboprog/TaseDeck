@@ -14,6 +14,7 @@ pub mod mcp_transport_catalog;
 pub mod security;
 pub mod proxy_log_ingest;
 pub mod proxy_oauth_refresh;
+pub mod project_disk_queue;
 pub mod topology_run;
 pub mod usage_log;
 pub mod workspace_bootstrap;
@@ -56,3 +57,8 @@ pub use proxy_oauth_refresh::ProxyOAuthRefresher;
 pub use topology_run::{TopologyAggregatorConfig, TopologyRunStatus, TopologyRunStore, TopologyServerInfo};
 pub use crate::db::UsageLogEntry;
 pub use usage_log::{UsageLogStore, TASEDECK_MCP_NAME};
+pub use project_disk_queue::{
+    enqueue_topology_project_disk_jobs, ProjectDiskJobCompletedPayload,
+    ProjectDiskJobFailedPayload, ProjectDiskQueue, PROJECT_DISK_JOB_COMPLETED_EVENT,
+    PROJECT_DISK_JOB_FAILED_EVENT,
+};

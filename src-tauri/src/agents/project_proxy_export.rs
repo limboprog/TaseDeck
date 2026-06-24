@@ -11,7 +11,6 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyExportScope {
@@ -138,6 +137,13 @@ pub fn remove_tasedeck_sidecar_files(project_root: &Path) -> Result<Vec<String>,
         if !path.is_file() {
             continue;
         }
+        let is_tools_cache = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".tools.json"));
+        if is_tools_cache {
+            continue;
+        }
         let is_json = path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
@@ -162,6 +168,28 @@ pub fn cleanup_tasedeck_project_agent_artifacts(
         removed.push(path.display().to_string());
     }
     Ok(removed)
+}
+
+/// Restores project MCP config for an agent kind from the stored native snapshot.
+pub fn restore_project_agent_mcp_from_default_source(
+    db: &Database,
+    project_id: i64,
+    agent_kind: &str,
+) -> Result<Vec<String>, String> {
+    let project = db
+        .get_project_record(project_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("project {project_id} not found"))?;
+    let project_root = normalize_folder_path(project.folder_path.trim())
+        .ok_or_else(|| "invalid project folder path".to_string())?;
+    let snapshot = db
+        .get_project_default_source_mcp_json(project_id)
+        .map_err(|error| error.to_string())?;
+    crate::agents::mcp_json::restore_project_mcp_json_to_snapshot(
+        &project_root,
+        agent_kind,
+        snapshot.as_deref(),
+    )
 }
 
 fn rekey_assignment_if_needed(
@@ -502,72 +530,41 @@ fn log_export_error(context: &str, error: String) {
 }
 
 pub fn schedule_project_proxy_export(
-    db: Arc<Database>,
-    oauth: Arc<OAuthStore>,
-    tools_store: Arc<McpToolsStore>,
+    queue: &crate::services::ProjectDiskQueue,
     project_id: i64,
     agent_id: i64,
     extra_kinds_to_clean: Vec<String>,
     scope: ProxyExportScope,
 ) {
-    std::thread::Builder::new()
-        .name(format!("proxy-export-p{project_id}-a{agent_id}"))
-        .spawn(move || {
-            if let Err(error) = sync_project_tasedeck_mcp_merged(
-                &db,
-                Some(oauth.as_ref()),
-                Some(tools_store.as_ref()),
-                project_id,
-                &extra_kinds_to_clean,
-                scope,
-            ) {
-                log_export_error(
-                    &format!("project {project_id} agent {agent_id}"),
-                    error,
-                );
-            }
-        })
-        .ok();
+    match scope {
+        ProxyExportScope::Full => {
+            queue.enqueue_export_full(project_id, Some(agent_id), extra_kinds_to_clean);
+        }
+        ProxyExportScope::SidecarsOnly => {
+            queue.enqueue_export_sidecars(project_id, Some(agent_id));
+        }
+    }
 }
 
 pub fn schedule_projects_for_preset_export(
-    db: Arc<Database>,
-    oauth: Arc<OAuthStore>,
-    tools_store: Arc<McpToolsStore>,
+    queue: &crate::services::ProjectDiskQueue,
+    db: &Database,
     preset_id: i64,
 ) {
-    std::thread::Builder::new()
-        .name(format!("proxy-export-preset-{preset_id}"))
-        .spawn(move || {
-            if let Err(error) = sync_projects_for_preset(
-                &db,
-                Some(oauth.as_ref()),
-                Some(tools_store.as_ref()),
-                preset_id,
-            ) {
-                log_export_error(&format!("preset {preset_id}"), error);
-            }
-        })
-        .ok();
+    let Ok(pairs) = db.list_project_agent_assignments_for_preset(preset_id) else {
+        return;
+    };
+    let mut project_ids = HashSet::new();
+    for (project_id, agent_id) in pairs {
+        if project_ids.insert(project_id) {
+            queue.enqueue_export_sidecars(project_id, Some(agent_id));
+        }
+    }
 }
 
 pub fn schedule_projects_using_server_export(
-    db: Arc<Database>,
-    oauth: Arc<OAuthStore>,
-    tools_store: Arc<McpToolsStore>,
+    queue: &crate::services::ProjectDiskQueue,
     server_id: i64,
 ) {
-    std::thread::Builder::new()
-        .name(format!("proxy-export-server-{server_id}"))
-        .spawn(move || {
-            if let Err(error) = sync_projects_using_server(
-                &db,
-                Some(oauth.as_ref()),
-                Some(tools_store.as_ref()),
-                server_id,
-            ) {
-                log_export_error(&format!("server {server_id}"), error);
-            }
-        })
-        .ok();
+    queue.enqueue_for_all_projects_using_server(server_id);
 }

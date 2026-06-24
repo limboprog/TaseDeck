@@ -11,6 +11,7 @@ type SidebarNavSubItemProps = {
   label: string;
   logoSrc?: string | null;
   leading?: ReactNode;
+  trailing?: ReactNode;
   icon?: ReactNode;
   active: boolean;
   collapsed: boolean;
@@ -55,6 +56,7 @@ export function SidebarNavSubItem({
   label,
   logoSrc,
   leading,
+  trailing,
   icon,
   active,
   collapsed,
@@ -158,6 +160,7 @@ export function SidebarNavSubItem({
       >
         {label}
       </Text>
+      {trailing ? <XStack shrink={0}>{trailing}</XStack> : null}
     </button>
   );
 }

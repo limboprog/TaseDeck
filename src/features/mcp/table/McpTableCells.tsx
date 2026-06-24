@@ -672,6 +672,36 @@ export function McpTableFolderPath({
   commitOnBlur?: boolean;
   placeholder?: string;
 }) {
+  return (
+    <McpTablePathPicker
+      value={value}
+      onChange={onChange}
+      onCommit={onCommit}
+      onPick={onPickFolder}
+      resolving={resolving}
+      commitOnBlur={commitOnBlur}
+      placeholder={placeholder}
+    />
+  );
+}
+
+export function McpTablePathPicker({
+  value,
+  onChange,
+  onCommit,
+  onPick,
+  resolving = false,
+  commitOnBlur = true,
+  placeholder = "Path",
+}: {
+  value: string;
+  onChange?: (value: string) => void;
+  onCommit?: () => void;
+  onPick: () => Promise<string | null>;
+  resolving?: boolean;
+  commitOnBlur?: boolean;
+  placeholder?: string;
+}) {
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -680,10 +710,9 @@ export function McpTableFolderPath({
   };
 
   const handleChoose = async () => {
-    const picked = await onPickFolder();
+    const picked = await onPick();
     if (picked) {
       onChange?.(picked);
-      onCommit?.();
     }
   };
 
@@ -693,7 +722,7 @@ export function McpTableFolderPath({
         type="button"
         data-mcp-row-interactive
         onClick={() => void handleChoose()}
-        aria-label="Choose folder"
+        aria-label="Choose path"
         style={{
           display: "flex",
           alignItems: "center",

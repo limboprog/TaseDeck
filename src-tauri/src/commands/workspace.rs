@@ -1,7 +1,3 @@
-use crate::agents::project_proxy_export::{
-    schedule_project_proxy_export, sync_project_agent_proxy_mcp,
-    sync_project_proxy_mcp_for_all_agents, sync_project_tasedeck_mcp_merged, ProxyExportScope,
-};
 use crate::db::{
     Database, PresetRecord, ProjectAssignmentDetail, ProjectDetailRecord, ProjectRecord,
     WorkspaceBootstrapRequest, WorkspaceBootstrapResult, WorkspaceBootstrapStatus,
@@ -10,51 +6,16 @@ use crate::error::{AppError, AppResult};
 use crate::services::workspace_bootstrap::{
     run_workspace_bootstrap_shared, workspace_bootstrap_status,
 };
-use crate::services::ProxyLogIngestor;
-use crate::services::{McpToolsStore, OAuthStore};
+use crate::services::ProjectDiskQueue;
 use std::sync::Arc;
 use tauri::State;
 
-fn export_project_agent_mcp(
-    db: &Database,
-    oauth: Option<&OAuthStore>,
-    tools_store: Option<&McpToolsStore>,
-    ingestor: Option<&ProxyLogIngestor>,
+fn enqueue_project_mcp_export_full(
+    queue: &ProjectDiskQueue,
     project_id: i64,
-    agent_id: i64,
-) -> Result<Vec<String>, AppError> {
-    let written = sync_project_agent_proxy_mcp(
-        db,
-        oauth,
-        tools_store,
-        project_id,
-        agent_id,
-    )
-    .map_err(AppError::Message)?;
-    if let Some(ingestor) = ingestor {
-        let _ = ingestor.poll_once();
-    }
-    Ok(written)
-}
-
-fn schedule_project_agent_export(
-    db: &Arc<Database>,
-    oauth: &Arc<OAuthStore>,
-    tools_store: &Arc<McpToolsStore>,
-    project_id: i64,
-    agent_id: i64,
-    extra_kinds_to_clean: Vec<String>,
-    scope: ProxyExportScope,
+    agent_id: Option<i64>,
 ) {
-    schedule_project_proxy_export(
-        Arc::clone(db),
-        Arc::clone(oauth),
-        Arc::clone(tools_store),
-        project_id,
-        agent_id,
-        extra_kinds_to_clean,
-        scope,
-    );
+    queue.enqueue_export_full(project_id, agent_id, Vec::new());
 }
 
 fn assignment_detail(
@@ -96,31 +57,6 @@ pub fn project_record_get(db: State<'_, Arc<Database>>, id: i64) -> AppResult<Op
     Ok(db.get_project_record(id)?)
 }
 
-fn sync_project_mcp_export_full(
-    db: &Database,
-    oauth: &OAuthStore,
-    tools_store: &McpToolsStore,
-    project_id: i64,
-) -> Result<(), AppError> {
-    if db
-        .list_project_agents(project_id)
-        .map_err(|error| AppError::Message(error.to_string()))?
-        .is_empty()
-    {
-        return Ok(());
-    }
-    sync_project_tasedeck_mcp_merged(
-        db,
-        Some(oauth),
-        Some(tools_store),
-        project_id,
-        &[],
-        ProxyExportScope::Full,
-    )
-    .map_err(AppError::Message)?;
-    Ok(())
-}
-
 fn backfill_project_default_source_mcp_json(db: &Database, project_id: i64) {
     if db
         .get_project_default_source_mcp_json(project_id)
@@ -159,8 +95,7 @@ fn backfill_project_default_source_mcp_json(db: &Database, project_id: i64) {
 #[tauri::command]
 pub fn project_record_create(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     folder_path: String,
     name: String,
     icon_color: Option<String>,
@@ -176,97 +111,99 @@ pub fn project_record_create(
     )
     .unwrap_or(false)
     {
-        let _ = sync_project_mcp_export_full(
-            db.inner(),
-            oauth.inner(),
-            tools_store.inner(),
-            project.id,
-        );
+        enqueue_project_mcp_export_full(disk_queue.inner(), project.id, None);
     }
     Ok(project)
 }
 
 #[tauri::command]
-pub async fn project_record_delete(db: State<'_, Arc<Database>>, id: i64) -> AppResult<bool> {
+pub async fn project_record_delete(
+    db: State<'_, Arc<Database>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
+    id: i64,
+) -> AppResult<bool> {
     let db = Arc::clone(db.inner());
-    tauri::async_runtime::spawn_blocking(move || db.delete_project_record(id))
-        .await
-        .map_err(|error| crate::error::AppError::Message(error.to_string()))?
-        .map_err(Into::into)
+    let disk_queue = Arc::clone(disk_queue.inner());
+    tauri::async_runtime::spawn_blocking(move || -> rusqlite::Result<bool> {
+        let restore_kinds = db.list_project_disk_restore_kinds(id).unwrap_or_default();
+        let deleted = db.delete_project_record(id)?;
+        if deleted {
+            for kind in restore_kinds {
+                disk_queue.enqueue_restore_agent(id, None, kind);
+            }
+            disk_queue.release_project(id);
+        }
+        Ok(deleted)
+    })
+    .await
+    .map_err(|error| crate::error::AppError::Message(error.to_string()))?
+    .map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn project_record_get_detail(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     id: i64,
 ) -> AppResult<Option<ProjectDetailRecord>> {
     let native_mcp_imported =
         crate::agents::project_mcp_import::import_native_mcp_servers_for_project(db.inner(), id)
             .unwrap_or(false);
     if native_mcp_imported {
-        let _ = sync_project_mcp_export_full(db.inner(), oauth.inner(), tools_store.inner(), id);
+        enqueue_project_mcp_export_full(disk_queue.inner(), id, None);
     }
+    disk_queue.retry_dirty_project(id);
     db.backfill_linked_agents_without_assignment(id)
         .map_err(|error| AppError::Message(error.to_string()))?;
     backfill_project_default_source_mcp_json(db.inner(), id);
     let mut detail = db.get_project_detail(id)?;
     if let Some(record) = detail.as_mut() {
         record.native_mcp_imported = native_mcp_imported;
+        record.disk_sync_pending =
+            record.project.disk_sync_dirty || disk_queue.is_project_dirty(id);
     }
     Ok(detail)
 }
 
 #[tauri::command]
+pub fn project_record_retry_export(
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
+    project_id: i64,
+) -> AppResult<bool> {
+    let was_dirty = disk_queue.is_project_dirty(project_id);
+    disk_queue.retry_dirty_project(project_id);
+    Ok(was_dirty)
+}
+
+#[tauri::command]
 pub fn project_record_add_server(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
     mcp_server_id: i64,
 ) -> AppResult<ProjectAssignmentDetail> {
     db.add_mcp_server_to_project_agent(project_id, agent_id, mcp_server_id)?;
-    sync_project_tasedeck_mcp_merged(
-        db.inner(),
-        Some(oauth.inner()),
-        Some(tools_store.inner()),
-        project_id,
-        &[],
-        ProxyExportScope::Full,
-    )
-    .map_err(AppError::Message)?;
+    disk_queue.enqueue_export_full(project_id, Some(agent_id), Vec::new());
     assignment_detail(db.inner(), project_id, agent_id)
 }
 
 #[tauri::command]
 pub fn project_record_remove_server(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
     mcp_server_id: i64,
 ) -> AppResult<ProjectAssignmentDetail> {
     db.remove_mcp_server_from_project_agent(project_id, agent_id, mcp_server_id)?;
-    sync_project_tasedeck_mcp_merged(
-        db.inner(),
-        Some(oauth.inner()),
-        Some(tools_store.inner()),
-        project_id,
-        &[],
-        ProxyExportScope::Full,
-    )
-    .map_err(AppError::Message)?;
+    disk_queue.enqueue_export_full(project_id, Some(agent_id), Vec::new());
     assignment_detail(db.inner(), project_id, agent_id)
 }
 
 #[tauri::command]
 pub fn project_record_update_assignment(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
     project_id: i64,
     agent_id: i64,
     config_overrides: String,
@@ -288,8 +225,6 @@ pub fn project_record_update_assignment(
 #[tauri::command]
 pub fn project_record_assign_preset(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
     project_id: i64,
     agent_id: i64,
     preset_id: i64,
@@ -300,8 +235,6 @@ pub fn project_record_assign_preset(
 #[tauri::command]
 pub fn project_record_unassign_preset(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<bool> {
@@ -311,8 +244,7 @@ pub fn project_record_unassign_preset(
 #[tauri::command]
 pub fn project_record_use_default_preset(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<Option<ProjectAssignmentDetail>> {
@@ -320,7 +252,7 @@ pub fn project_record_use_default_preset(
         .apply_default_preset_to_agent(project_id, agent_id)
         .map_err(|error| AppError::Message(error.to_string()))?;
     if assignment.is_some() {
-        sync_project_mcp_export_full(db.inner(), oauth.inner(), tools_store.inner(), project_id)?;
+        enqueue_project_mcp_export_full(disk_queue.inner(), project_id, Some(agent_id));
     }
     Ok(assignment)
 }
@@ -328,8 +260,7 @@ pub fn project_record_use_default_preset(
 #[tauri::command]
 pub fn project_record_use_custom_preset(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<Option<ProjectAssignmentDetail>> {
@@ -337,7 +268,7 @@ pub fn project_record_use_custom_preset(
         .apply_custom_preset_to_agent(project_id, agent_id)
         .map_err(|error| AppError::Message(error.to_string()))?;
     if assignment.is_some() {
-        sync_project_mcp_export_full(db.inner(), oauth.inner(), tools_store.inner(), project_id)?;
+        enqueue_project_mcp_export_full(disk_queue.inner(), project_id, Some(agent_id));
     }
     Ok(assignment)
 }
@@ -345,16 +276,23 @@ pub fn project_record_use_custom_preset(
 #[tauri::command]
 pub fn project_record_delete_custom_preset(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<Option<ProjectAssignmentDetail>> {
+    let agent_kind = db
+        .get_agent_record(agent_id)?
+        .map(|agent| agent.kind);
     let assignment = db
         .delete_agent_custom_preset(project_id, agent_id)
         .map_err(|error| AppError::Message(error.to_string()))?;
-    if assignment.is_some() {
-        sync_project_mcp_export_full(db.inner(), oauth.inner(), tools_store.inner(), project_id)?;
+    if let (Some(_), Some(kind)) = (assignment.as_ref(), agent_kind) {
+        disk_queue.enqueue_restore_then_export_full(
+            project_id,
+            Some(agent_id),
+            kind,
+            Vec::new(),
+        );
     }
     Ok(assignment)
 }
@@ -362,8 +300,7 @@ pub fn project_record_delete_custom_preset(
 #[tauri::command]
 pub fn project_record_link_agent(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<bool> {
@@ -387,7 +324,7 @@ pub fn project_record_link_agent(
     }
 
     if should_export {
-        sync_project_mcp_export_full(db.inner(), oauth.inner(), tools_store.inner(), project_id)?;
+        enqueue_project_mcp_export_full(disk_queue.inner(), project_id, Some(agent_id));
     }
 
     Ok(true)
@@ -395,41 +332,18 @@ pub fn project_record_link_agent(
 
 #[tauri::command]
 pub fn project_record_export_proxy_config(
-    db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
-    ingestor: State<'_, Arc<ProxyLogIngestor>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: Option<i64>,
 ) -> AppResult<Vec<String>> {
-    let written = if let Some(agent_id) = agent_id {
-        export_project_agent_mcp(
-            db.inner(),
-            Some(oauth.inner()),
-            Some(tools_store.inner()),
-            Some(ingestor.inner()),
-            project_id,
-            agent_id,
-        )?
-    } else {
-        let paths = sync_project_proxy_mcp_for_all_agents(
-            db.inner(),
-            Some(oauth.inner()),
-            Some(tools_store.inner()),
-            project_id,
-        )
-        .map_err(AppError::Message)?;
-        let _ = ingestor.poll_once();
-        paths
-    };
-    Ok(written)
+    disk_queue.enqueue_export_full(project_id, agent_id, Vec::new());
+    Ok(Vec::new())
 }
 
 #[tauri::command]
 pub fn project_record_unlink_agent(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<bool> {
@@ -438,16 +352,14 @@ pub fn project_record_unlink_agent(
         .map(|agent| agent.kind);
     let removed = db.unlink_agent_project(agent_id, project_id)?;
     if removed {
-        let extra_kinds = agent_kind.map(|kind| vec![kind]).unwrap_or_default();
-        schedule_project_agent_export(
-            db.inner(),
-            oauth.inner(),
-            tools_store.inner(),
-            project_id,
-            agent_id,
-            extra_kinds,
-            ProxyExportScope::Full,
-        );
+        if let Some(kind) = agent_kind {
+            disk_queue.enqueue_restore_then_export_full(
+                project_id,
+                Some(agent_id),
+                kind.clone(),
+                vec![kind],
+            );
+        }
     }
     Ok(removed)
 }
@@ -455,32 +367,22 @@ pub fn project_record_unlink_agent(
 #[tauri::command]
 pub fn project_record_reset_agent(
     db: State<'_, Arc<Database>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     project_id: i64,
     agent_id: i64,
 ) -> AppResult<bool> {
     let agent = db
         .get_agent_record(agent_id)?
         .ok_or_else(|| AppError::Message(format!("agent {agent_id} not found")))?;
-    let project = db
-        .get_project_record(project_id)?
-        .ok_or_else(|| AppError::Message(format!("project {project_id} not found")))?;
-    let project_root = crate::agents::project_discovery::normalize_folder_path(
-        project.folder_path.trim(),
-    )
-    .ok_or_else(|| AppError::Message("invalid project folder path".into()))?;
-
-    let snapshot = db.get_project_default_source_mcp_json(project_id)?;
-    crate::agents::mcp_json::restore_project_mcp_json_to_snapshot(
-        &project_root,
-        &agent.kind,
-        snapshot.as_deref(),
-    )
-    .map_err(AppError::Message)?;
 
     db.purge_agent_custom_preset_records(project_id, agent_id)
         .map_err(|error| AppError::Message(error.to_string()))?;
 
-    Ok(db.unlink_agent_project(agent_id, project_id)?)
+    let removed = db.unlink_agent_project(agent_id, project_id)?;
+    if removed {
+        disk_queue.enqueue_restore_agent(project_id, Some(agent_id), agent.kind);
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -517,8 +419,7 @@ pub struct PresetTryDeleteResult {
 #[tauri::command]
 pub fn preset_record_try_delete(
     db: State<'_, Arc<Database>>,
-    oauth: State<'_, Arc<OAuthStore>>,
-    tools_store: State<'_, Arc<McpToolsStore>>,
+    disk_queue: State<'_, Arc<ProjectDiskQueue>>,
     id: i64,
 ) -> AppResult<PresetTryDeleteResult> {
     let (deleted, in_use, unassigned) = db.try_delete_preset_if_unused(id)?;
@@ -529,15 +430,14 @@ pub fn preset_record_try_delete(
         });
     }
     for (project_id, agent_id) in unassigned {
-        schedule_project_agent_export(
-            db.inner(),
-            oauth.inner(),
-            tools_store.inner(),
-            project_id,
-            agent_id,
-            Vec::new(),
-            ProxyExportScope::Full,
-        );
+        if let Ok(Some(agent)) = db.get_agent_record(agent_id) {
+            disk_queue.enqueue_restore_then_export_full(
+                project_id,
+                Some(agent_id),
+                agent.kind,
+                Vec::new(),
+            );
+        }
     }
     Ok(PresetTryDeleteResult { deleted, in_use: false })
 }

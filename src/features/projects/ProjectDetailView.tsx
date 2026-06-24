@@ -14,6 +14,12 @@ import {
 import { notifyPresetsChanged, PRESETS_CHANGED_EVENT } from "../../services/presets/storage";
 import type { Preset } from "../../services/presets";
 import {
+  PROJECT_DISK_JOB_COMPLETED_UI_EVENT,
+  PROJECT_DISK_JOB_FAILED_UI_EVENT,
+  type ProjectDiskJobCompletedPayload,
+  type ProjectDiskJobFailedPayload,
+} from "../../services/projects/diskJobEvents";
+import {
   addProjectServer,
   assignProjectPreset,
   deleteProjectCustomPreset,
@@ -24,6 +30,7 @@ import {
   removeProjectServer,
   resetProjectAgent,
   resolveAgentPresetMode,
+  retryProjectDiskExport,
   updateProjectAssignmentOverrides,
   useProjectCustomPreset,
   useProjectDefaultPreset,
@@ -187,6 +194,18 @@ export function ProjectDetailView({ projectId }: ProjectDetailViewProps) {
     return () => window.removeEventListener(PROJECTS_CHANGED_EVENT, onChanged);
   }, [syncDetail]);
 
+  useEffect(() => {
+    const onDiskJobFailed = (event: Event) => {
+      const payload = (event as CustomEvent<ProjectDiskJobFailedPayload>).detail;
+      if (!payload || payload.projectId !== Number(projectId)) {
+        return;
+      }
+      void syncDetail({ silent: true, preserveHistory: true });
+    };
+    window.addEventListener(PROJECT_DISK_JOB_FAILED_UI_EVENT, onDiskJobFailed);
+    return () => window.removeEventListener(PROJECT_DISK_JOB_FAILED_UI_EVENT, onDiskJobFailed);
+  }, [projectId, syncDetail]);
+
   const scrollRestoredRef = useRef(false);
   useEffect(() => {
     scrollRestoredRef.current = false;
@@ -211,6 +230,32 @@ export function ProjectDetailView({ projectId }: ProjectDetailViewProps) {
     localProjectsChangeRef.current = true;
     notifyProjectsChanged();
   }, []);
+
+  useEffect(() => {
+    const onDiskJobCompleted = (event: Event) => {
+      const payload = (event as CustomEvent<ProjectDiskJobCompletedPayload>).detail;
+      if (!payload || payload.projectId !== Number(projectId)) {
+        return;
+      }
+      void syncDetail({ silent: true, preserveHistory: true });
+      emitProjectsChanged();
+    };
+    window.addEventListener(PROJECT_DISK_JOB_COMPLETED_UI_EVENT, onDiskJobCompleted);
+    return () => window.removeEventListener(PROJECT_DISK_JOB_COMPLETED_UI_EVENT, onDiskJobCompleted);
+  }, [emitProjectsChanged, projectId, syncDetail]);
+
+  const handleRetryDiskSync = useCallback(() => {
+    void (async () => {
+      try {
+        const queued = await retryProjectDiskExport(projectId);
+        if (queued) {
+          void syncDetail({ silent: true, preserveHistory: true });
+        }
+      } catch (cause) {
+        console.error("Failed to retry project disk export", cause);
+      }
+    })();
+  }, [projectId, syncDetail]);
 
   const agents = detail?.agents ?? [];
   const agentIds = useMemo(() => agents.map((agent) => agent.id), [agents]);
@@ -283,7 +328,6 @@ export function ProjectDetailView({ projectId }: ProjectDetailViewProps) {
               return;
             }
             await exportProjectProxyConfig(projectId, agentId);
-            emitProjectsChanged();
           } catch (cause) {
             console.error("Failed to save project assignment overrides", cause);
             void syncDetail({ silent: true, preserveHistory: true });
@@ -298,7 +342,7 @@ export function ProjectDetailView({ projectId }: ProjectDetailViewProps) {
         return { ...current, [agentId]: agentDraft };
       });
     },
-    [emitProjectsChanged, projectId, syncDetail],
+    [projectId, syncDetail],
   );
 
   const getAgentSectionElement = useCallback(
@@ -935,6 +979,8 @@ export function ProjectDetailView({ projectId }: ProjectDetailViewProps) {
           >
             <ProjectDetailHeader
               projectName={detail.project.name}
+              diskSyncPending={detail.diskSyncPending}
+              onRetryDiskSync={detail.diskSyncPending ? handleRetryDiskSync : undefined}
               canUndo={canUndoSettings}
               canRedo={canRedoSettings}
               onUndo={handleUndoSettings}
