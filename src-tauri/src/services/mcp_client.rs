@@ -1,3 +1,4 @@
+use crate::core::env::{apply_process_env, shell_command_builder};
 use crate::core::process::hide_console_window;
 use crate::db::McpServer;
 use crate::services::mcp_protocol::{
@@ -676,7 +677,7 @@ fn spawn_shell_command(shell: &str, extra_env: &HashMap<String, String>) -> Resu
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    apply_inherited_env(&mut command_builder);
+    apply_process_env(&mut command_builder);
     for (key, value) in extra_env {
         command_builder.env(key, value);
     }
@@ -698,47 +699,13 @@ fn spawn_direct_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    apply_inherited_env(&mut command_builder);
+    apply_process_env(&mut command_builder);
     for (key, value) in env {
         command_builder.env(key, value);
     }
     command_builder
         .spawn()
         .map_err(|error| format!("failed to spawn MCP process: {error}"))
-}
-
-fn shell_command_builder() -> Command {
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("cmd");
-        command.arg("/C");
-        command
-    }
-    #[cfg(not(windows))]
-    {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-        let mut command = Command::new(shell);
-        command.arg("-l").arg("-c");
-        command
-    }
-}
-
-fn apply_inherited_env(command: &mut Command) {
-    command.envs(std::env::vars());
-    #[cfg(not(windows))]
-    {
-        if let Ok(shell) = std::env::var("SHELL") {
-            command.env("SHELL", shell);
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let path = std::env::var("PATH").unwrap_or_default();
-        if !path.contains("/opt/homebrew/bin") || !path.contains("/usr/local/bin") {
-            let enriched = format!("/opt/homebrew/bin:/usr/local/bin:{path}");
-            command.env("PATH", enriched);
-        }
-    }
 }
 
 fn child_exit_detail(child: &mut Child) -> String {
