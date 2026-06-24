@@ -1,7 +1,8 @@
-<h1 align="center">
-  <img src="./public/LOGO.svg" alt="TaseDeck logo" width="46" />
-  TaseDeck - Topology of agent-server execution
-</h1>
+<p align="center">
+  <img src="./public/LOGO.svg" alt="TaseDeck logo" width="76" />
+</p>
+
+<h1 align="center">TaseDeck - Topology of agent-server execution</h1>
 
 <p align="center">
   A desktop control plane for MCP servers, project presets, agent configs, and tool-call observability.
