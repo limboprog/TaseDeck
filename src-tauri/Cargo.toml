@@ -1,8 +1,8 @@
 [package]
 name = "tase_deck"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Desktop MCP server manager with project presets and agent mcp.json sync"
+authors = ["Leonid Borodin"]
 edition = "2021"
 default-run = "tase_deck"
 

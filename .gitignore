@@ -63,6 +63,11 @@ venv/
 /mcp.json
 /mcp copy*.json
 
+# --- Template assets from Vite/Tauri scaffolds (not used by the app) ---
+public/tauri.svg
+public/vite.svg
+src/assets/react.svg
+
 # --- Personal / internal notes (not part of the shipped app) ---
 note.md
 plan.md

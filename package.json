@@ -1,12 +1,14 @@
 {
   "name": "tasedeck",
-  "private": true,
   "version": "0.1.0",
+  "description": "Desktop MCP server manager with project presets and agent mcp.json sync",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "icons": "tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons",
     "tauri": "tauri"
   },
   "dependencies": {
