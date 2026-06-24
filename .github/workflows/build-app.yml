@@ -19,10 +19,20 @@ jobs:
             args: --target x86_64-apple-darwin
           - platform: windows-latest
             args: ''
+          # 1. ДОБАВЛЯЕМ LINUX (Сборка .deb и .AppImage)
+          - platform: ubuntu-22.04
+            args: ''
 
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
+      # 2. УСТАНОВКА СИСТЕМНЫХ ЗАВИСИМОСТЕЙ ДЛЯ LINUX
+      - name: install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev build-essential curl wget file libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: setup node
         uses: actions/setup-node@v4
@@ -43,13 +53,16 @@ jobs:
       - name: install frontend dependencies
         run: npm ci
 
+      # 3. СБОРКА И АВТОМАТИЧЕСКИЙ РЕЛИЗ (v0.1.0-alpha)
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: app-v__VERSION__
-          releaseName: App v__VERSION__
-          releaseBody: Скачайте установщик для вашей системы.
+          # tauri-action сам заменит __VERSION__ на версию из твоих файлов (например, 0.1.0-alpha)
+          tagName: v__VERSION__
+          releaseName: "TaseDeck v__VERSION__"
+          releaseBody: "Скачайте установщик TaseDeck для вашей системы."
           releaseDraft: true
-          prerelease: false
+          # Ставим true, так как это Альфа-версия (пометит релиз как Pre-release в GitHub)
+          prerelease: true
           args: ${{ matrix.args }}
